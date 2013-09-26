@@ -3,7 +3,7 @@ Summary:    Telephony Packet Service library
 Version:    0.1.34
 Release:    1
 Group:      System/Libraries
-License:    Apache
+License:    Apache-2.0
 Source0:    tel-plugin-packetservice-%{version}.tar.gz
 Requires(post): /sbin/ldconfig
 Requires(postun): /sbin/ldconfig
@@ -55,6 +55,7 @@ fi
 %install
 %make_install
 mkdir -p %{buildroot}/usr/share/license
+cp LICENSE %{buildroot}/usr/share/license/%{name}
 
 %files
 %manifest tel-plugin-packetservice.manifest
@@ -63,4 +64,4 @@ mkdir -p %{buildroot}/usr/share/license
 /usr/share/ps-plugin/dnet_db_data.sql
 %{_sysconfdir}/dbus-1/system.d/*
 %{_libdir}/telephony/plugins/ps-plugin*
-/usr/share/license/tel-plugin-packetservice
+/usr/share/license/%{name}
