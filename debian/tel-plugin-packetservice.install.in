@@ -1,0 +1,4 @@
+@PREFIX@/lib/*
+@PREFIX@/etc/dbus-1/system.d/*
+/tmp/dnet_db.sql
+/tmp/dnet_db_data.sql

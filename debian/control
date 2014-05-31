@@ -1,0 +1,21 @@
+Source: tel-plugin-packetservice
+Section: libs
+Priority: extra
+Maintainer: DongHoo Park <donghoo.park@samsung.com>
+Uploaders: DongHoo Park <donghoo.park@samsung.com>
+Build-Depends: debhelper (>= 5),
+               libdbus-glib-1-dev, libtcore-dev, libglib2.0-dev, dlog-dev, libslp-db-util-dev
+Standards-Version: 0.0.0
+
+Package: tel-plugin-packetservice
+Section: libs
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends},
+Description: telephony client API library (Shared Object)
+
+Package: tel-plugin-packetservice-dbg
+Section: debug
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, tel-plugin-packetservice (= ${Source-Version})
+Description: telephony client API library (dbg package)
+

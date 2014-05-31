@@ -1,0 +1,24 @@
+#!/bin/sh
+
+#create db
+mkdir -p /opt/dbspace/
+
+if [ ! -f /opt/dbspace/.dnet.db ]
+then
+ sqlite3 /opt/dbspace/.dnet.db < /tmp/dnet_db.sql
+ sqlite3 /opt/dbspace/.dnet.db < /tmp/dnet_db_data.sql
+fi
+
+ rm -f /tmp/dnet_db.sql
+ rm -f /tmp/dnet_db_data.sql
+
+#Change File Permission
+if [ -f /opt/dbspace/.dnet.db ]
+then
+	chmod 600 /opt/dbspace/.dnet.db
+fi
+
+if [ -f /opt/dbspace/.dnet.db-journal ]
+then
+	chmod 644 /opt/dbspace/.dnet.db-journal
+fi

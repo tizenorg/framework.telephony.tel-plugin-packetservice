@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<node name="/">
+	<interface name="com.tcore.ps.modem">
+		<method name="GetProperties">
+			<annotation name="org.freedesktop.DBus.GLib.Async" value="yes"/>
+				<arg  type="a{ss}" name="modem_property" direction="out" />
+		</method>
+		<method name="GetServices">
+			<annotation name="org.freedesktop.DBus.GLib.Async" value="yes"/>
+				<arg  type="a{sa{ss}}" name="service_hash" direction="out" />
+		</method>
+		<signal name="PropertyChanged">
+			<arg type="a{ss}" name="modem_property" direction="out" />
+		</signal>
+		<signal name="ServiceAdded">
+			<arg type="a{ss}" name="service" direction="out" />
+		</signal>
+		<signal name="ServiceRemoved">
+			<arg  type="s" name="service_path" direction="out" />
+		</signal>
+	</interface>
+</node>
+
