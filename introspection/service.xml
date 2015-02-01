@@ -1,13 +1,10 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<node name="/">
+<node>
 	<interface name="com.tcore.ps.service">
 		<method name="GetProperties">
-			<annotation name="org.freedesktop.DBus.GLib.Async" value="yes"/>
-				<arg  type="a{ss}" name="service_property" direction="out" />
+			<arg  type="a{ss}" name="service_property" direction="out" />
 		</method>
 		<method name="GetContexts">
-			<annotation name="org.freedesktop.DBus.GLib.Async" value="yes"/>
-				<arg  type="a{sa{ss}}" name="context_hash" direction="out" />
+			<arg  type="a{sa{ss}}" name="context_hash" direction="out" />
 		</method>
 		<signal name="PropertyChanged">
 			<arg type="a{ss}" name="service_property" direction="out" />

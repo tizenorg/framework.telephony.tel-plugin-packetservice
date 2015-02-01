@@ -1,5 +1,5 @@
 /*
- * tel-plugin-packetservice
+ * PacketService Control Module
  *
  * Copyright (c) 2012 Samsung Electronics Co., Ltd. All rights reserved.
  *
@@ -19,13 +19,18 @@
  *
  */
 
-#include "ps-error.h"
+#include <tcore.h>
+#include <server.h>
+#include <core_object.h>
 
-GQuark ps_error_quark(void)
+#include <glib.h>
+
+gchar *ps_log_get_tag(CoreObject *co);
+
+gchar *ps_log_get_tag(CoreObject *co)
 {
-	static GQuark quark = 0;
+	const char *cp_name;
+	cp_name = tcore_server_get_cp_name_by_plugin(tcore_object_ref_plugin(co));
 
-	if (!quark) quark = g_quark_from_static_string("ps_error");
-
-	return quark;
+	return g_strdup_printf("PS/%s", cp_name);
 }

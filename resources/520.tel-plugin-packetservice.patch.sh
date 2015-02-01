@@ -1,0 +1,1 @@
+/bin/echo 'alter table pdp_profile add user_defined INTEGER default 0;' | /usr/bin/sqlite3 /opt/dbspace/.dnet.db

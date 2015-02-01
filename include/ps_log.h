@@ -1,5 +1,5 @@
 /*
- * tel-plugin-packetservice
+ * PacketService Control Module
  *
  * Copyright (c) 2012 Samsung Electronics Co., Ltd. All rights reserved.
  *
@@ -19,27 +19,30 @@
  *
  */
 
-#ifndef __PS_ERROR_H__
-#define __PS_ERROR_H__
+#pragma once
 
-#include <glib.h>
-#include <dbus/dbus-glib.h>
+extern gchar *ps_log_get_tag(CoreObject *co);
 
-G_BEGIN_DECLS
+#define ps_err_ex_co(c,...) do {	\
+		gchar *tag = ps_log_get_tag(c);	\
+		err_ex(tag, "[ERROR] "__VA_ARGS__);	\
+		g_free(tag);	\
+	} while (0)
 
-typedef enum {
-	PS_ERR_INTERNAL,
-	PS_ERR_NO_SERVICE,
-	PS_ERR_TRASPORT,
-	PS_ERR_NO_PROFILE,
-	PS_ERR_WRONG_PROFILE,
-	PS_ERR_MAX
-} PS_ERR;
+#define ps_warn_ex_co(c,...) do {	\
+		gchar *tag = ps_log_get_tag(c);	\
+		warn_ex(tag, "[WARN] "__VA_ARGS__);	\
+		g_free(tag);	\
+	} while (0)
 
-GQuark ps_error_quark(void);
+#define ps_msg_ex_co(c,...) do {	\
+		gchar *tag = ps_log_get_tag(c);	\
+		msg_ex(tag, __VA_ARGS__);	\
+		g_free(tag);	\
+	} while (0)
 
-#define    PS_ERROR	( ps_error_quark() )
-
-G_END_DECLS
-
-#endif /* __PS_ERROR_H__ */
+#define ps_dbg_ex_co(c,...) do {	\
+		gchar *tag = ps_log_get_tag(c);	\
+		dbg_ex(tag, __VA_ARGS__);	\
+		g_free(tag);	\
+	} while (0)
