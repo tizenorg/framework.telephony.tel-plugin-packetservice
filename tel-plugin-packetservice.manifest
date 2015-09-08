@@ -1,0 +1,8 @@
+<manifest>
+	<request>
+		<domain name="_"/>
+	</request>
+	<assign>
+		<filesystem path="/opt/etc/dump.d/module.d/dump_packetservice.sh" exec_label="none"/>
+	</assign>
+</manifest>

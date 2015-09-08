@@ -19,27 +19,18 @@
  *
  */
 
-#ifndef __PS_MODEM_H__
-#define __PS_MODEM_H__
+#include <tcore.h>
+#include <server.h>
+#include <core_object.h>
 
 #include <glib.h>
-#include <dbus/dbus-glib.h>
 
-G_BEGIN_DECLS
+gchar *ps_log_get_tag(CoreObject *co);
 
-typedef struct PsModem		PsModem;
-typedef struct PsModemClass	PsModemClass;
+gchar *ps_log_get_tag(CoreObject *co)
+{
+	const char *cp_name;
+	cp_name = tcore_server_get_cp_name_by_plugin(tcore_object_ref_plugin(co));
 
-#define PS_TYPE_MODEM				( ps_modem_get_type() )
-#define PS_MODEM(obj)				( G_TYPE_CHECK_INSTANCE_CAST( (obj),PS_TYPE_MODEM, PsModem ) )
-#define PS_IS_MODEM(obj)			( G_TYPE_CHECK_INSTANCE_TYPE( (obj), PS_TYPE_MODEM) )
-
-#define PS_MODEM_CLASS(klass)		( G_TYPE_CHECK_CLASS_CAST( (klass), PS_TYPE_MODEM, PsModemClass ) )
-#define PS_IS_MODEM_CLASS(klass)	( G_TYPE_CHECK_CLASS_TYPE( (klass), PS_TYPE_MODEM ) )
-#define PS_MODEM_GET_CLASS(obj)		( G_TYPE_INSTANCE_GET_CLASS( (obj), PS_TYPE_MODEM, PsModemClass ) )
-
-GType ps_modem_get_type(void);
-
-G_END_DECLS
-
-#endif /* __PS_MODEM_H__ */
+	return g_strdup_printf("PS/%s", cp_name);
+}

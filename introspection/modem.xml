@@ -1,0 +1,31 @@
+<node>
+	<interface name="com.tcore.ps.modem">
+		<method name="GetProperties">
+			<arg  type="a{ss}" name="modem_property" direction="out" />
+		</method>
+		<method name="GetServices">
+			<arg  type="a{sa{ss}}" name="service_hash" direction="out" />
+		</method>
+		<method name="GetProfileList">
+			<arg  type="as" name="profile_list" direction="out" />
+		</method>
+		<method name="AddProfile">
+			<arg  type="a{ss}" name="profile_property" direction="in" />
+			<arg  type="b" name="result" direction="out" />
+		</method>
+		<method name="ResetProfile">
+			<arg  type="i" name="type" direction="in" />
+			<arg  type="b" name="result" direction="out" />
+		</method>
+		<signal name="PropertyChanged">
+			<arg type="a{ss}" name="modem_property" direction="out" />
+		</signal>
+		<signal name="ServiceAdded">
+			<arg type="a{ss}" name="service" direction="out" />
+		</signal>
+		<signal name="ServiceRemoved">
+			<arg  type="s" name="service_path" direction="out" />
+		</signal>
+
+	</interface>
+</node>

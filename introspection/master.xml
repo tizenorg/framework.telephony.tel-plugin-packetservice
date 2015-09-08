@@ -1,0 +1,15 @@
+<node>
+	<interface name="com.tcore.ps.master">
+		<method name="GetModems">
+			<arg  type="a{sa{ss}}" name="modem_hash" direction="out" />
+		</method>
+		<signal name="ModemAdded">
+			<arg  type="a{ss}" name="modem" direction="out" />
+		</signal>
+
+		<signal name="ModemRemoved">
+			<arg type="o" name="modem_path" direction="out" />
+		</signal>
+	</interface>
+</node>
+

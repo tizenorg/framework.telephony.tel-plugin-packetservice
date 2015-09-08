@@ -25,44 +25,751 @@
 #include <plugin.h>
 #include <storage.h>
 #include <co_ps.h>
+#include <co_context.h>
 #include <co_modem.h>
 #include <co_sim.h>
+#include <type/network.h>
 #include <co_network.h>
+#include <user_request.h>
+
+#define TIMEOUT_MAX			1280
+
+struct work_queue_data {
+	unsigned int id;
+	UserRequest *ur;
+};
+
+static void __ps_modem_set_hook_flag(ps_modem_t *modem ,enum tcore_request_command cmd);
+
+static gboolean ps_util_add_waiting_job(GQueue *queue, unsigned int id, UserRequest *ur)
+{
+	struct work_queue_data *wqd;
+
+	if (!queue)
+		return FALSE;
+
+	wqd = calloc(sizeof(struct work_queue_data), 1);
+	if (!wqd)
+		return FALSE;
+
+	wqd->id = id;
+	wqd->ur = ur;
+	g_queue_push_tail(queue, wqd);
+
+	dbg("id = %d, ur = 0x%x", wqd->id, wqd->ur);
+	return TRUE;
+}
+
+static guint ps_util_get_count_waiting_job(GQueue *queue, unsigned int id)
+{
+	guint i = 0;
+	guint count = 0;
+	struct work_queue_data *wqd = NULL;
+
+	if (!queue)
+		return count;
+
+	dbg("job count: %d", g_queue_get_length(queue));
+
+	do {
+		wqd = g_queue_peek_nth(queue, i);
+		if (!wqd)
+			break;
+
+		if (wqd->id == id) {
+			count++;
+		}
+
+		i++;
+	} while (wqd != NULL);
+
+	dbg("count: %d, id = %d", count, id);
+
+	return count;
+}
+
+static UserRequest *ps_util_pop_waiting_job(GQueue *queue, unsigned int id)
+{
+	int i = 0;
+	UserRequest *ur;
+	struct work_queue_data *wqd;
+
+	if (!queue)
+		return NULL;
+
+	dbg("before waiting job count: %d", g_queue_get_length(queue));
+
+	do {
+		wqd = g_queue_peek_nth(queue, i);
+		if (!wqd)
+			return NULL;
+
+		if (wqd->id == id) {
+			wqd = g_queue_pop_nth(queue, i);
+			break;
+		}
+
+		i++;
+	} while (wqd != NULL);
+
+	dbg("after  waiting job count: %d", g_queue_get_length(queue));
+
+	if (!wqd)
+		return NULL;
+
+	ur = wqd->ur;
+	free(wqd);
+
+	return ur;
+}
+
+void __ps_hook_response_cb(UserRequest *ur, enum tcore_response_command command,
+	unsigned int data_len, const void *data, void *user_data)
+{
+	ps_modem_t *modem = user_data;
+	CoreObject *co_modem = _ps_modem_ref_co_modem(modem);
+	guint count;
+	guint id;
+	id = ((command & ~TCORE_RESPONSE) & TCORE_REQUEST);
+
+	ps_dbg_ex_co(co_modem, "Entered");
+	count = ps_util_get_count_waiting_job(modem->work_queue, id);
+
+	if (count != 0) {
+		ur = ps_util_pop_waiting_job(modem->work_queue, id);
+		if(ur){
+			GSList *co_list = NULL;
+			CoreObject *co_network = NULL;
+
+			co_list = tcore_plugin_get_core_objects_bytype(tcore_object_ref_plugin(modem->co_modem),
+				CORE_OBJECT_TYPE_NETWORK);
+
+			if (G_UNLIKELY(co_list == NULL)) {
+				ps_err_ex_co(co_modem, "Network CoreObject is not present");
+				return;
+			}
+
+			co_network = (CoreObject *) co_list->data;
+			g_slist_free(co_list);
+
+			ps_dbg_ex_co(co_modem, "Sending Pending Request of type = id", id);
+			tcore_user_request_set_response_hook(ur, __ps_hook_response_cb, modem);
+			tcore_object_dispatch_request(co_network , ur);
+			return;
+		}
+	}
+
+	switch(command){
+		case TRESP_NETWORK_SET_CANCEL_MANUAL_SEARCH:
+		case TRESP_NETWORK_SEARCH:
+			ps_dbg_ex_co(co_modem, "TRESP_NETWORK_SEARCH  response received");
+			if (count == 0) {
+				modem->hook_flag &= PS_RESET_NETWORK_SEARCH_FLAG;
+			}
+			break;
+		case TRESP_NETWORK_SET_PLMN_SELECTION_MODE:
+			ps_dbg_ex_co(co_modem, "TRESP_NETWORK_SET_PLMN_SELECTION_MODE response received ");
+			if (count == 0) {
+				modem->hook_flag &= PS_NETWORK_RESET_SELECTION_FLAG;
+			}
+			break;
+		case TRESP_NETWORK_SET_MODE:{
+			ps_dbg_ex_co(co_modem, "TRESP_NETWORK_SET_MODE response received ");
+
+			if (count == 0) {
+				modem->hook_flag &= PS_NETWORK_RESET_SELECT_MODE_FLAG ;
+			}
+
+		}break;
+		case TRESP_NETWORK_SET_DEFAULT_DATA_SUBSCRIPTION:
+		ps_dbg_ex_co(co_modem, "TRESP_NETWORK_SET_DEFAULT_DATA_SUBSCRIPTION response received ");
+		if (count == 0) {
+			modem->hook_flag &= PS_NETWORK_RESET_SET_DEFAULT_DATA_SUBS;
+		}
+		break;
+		case TRESP_MODEM_SET_FLIGHTMODE:
+		ps_dbg_ex_co(co_modem, "TRESP_MODEM_SET_FLIGHTMODE response received ");
+		if (count == 0) {
+				modem->hook_flag &= PS_NETWORK_RESET_SET_FLIGHT_MODE_FLAG;
+		}
+		break;
+		case TRESP_MODEM_POWER_LOW:
+		ps_dbg_ex_co(co_modem, "TRESP_MODEM_POWER_LOW response received ");
+		if (count == 0) {
+				modem->hook_flag &= PS_NETWORK_RESET_SET_POWER_LOW_FLAG;
+		}
+		break;
+		case TRESP_MODEM_POWER_OFF:
+		ps_dbg_ex_co(co_modem, "TRESP_MODEM_POWER_OFF response received ");
+		if (count == 0) {
+				modem->hook_flag &= PS_NETWORK_RESET_SET_POWER_OFF_FLAG;
+		}
+		break;
+		case TRESP_SIM_SET_POWERSTATE:
+		ps_dbg_ex_co(co_modem, "TRESP_SIM_SET_POWERSTATE response received ");
+		if (count == 0) {
+				modem->hook_flag &= PS_SIM_SET_POWER_STATE_FLAG;
+		}
+		break;
+		default :{
+			ps_dbg_ex_co(co_modem, "Unexpected response ");
+		} break;
+	}
+	ps_dbg_ex_co(co_modem, " FLAG %x", modem->hook_flag);
+
+	if(modem->hook_flag == PS_NO_PENDING_REQUEST
+		&& command != TRESP_MODEM_POWER_LOW
+		 && command != TRESP_MODEM_POWER_OFF) {
+		_ps_modem_set_data_allowed(modem, modem->data_allowed);
+	}
+}
+
+void __ps_modem_set_hook_flag(ps_modem_t *modem ,enum tcore_request_command cmd)
+{
+	CoreObject *co_modem = _ps_modem_ref_co_modem(modem);
+
+	switch(cmd) {
+		case TREQ_NETWORK_SEARCH:
+			ps_dbg_ex_co(co_modem, "TREQ_NETWORK_SEARCH");
+			modem->hook_flag |= PS_NETWORK_SEARCH_PENDING;
+			ps_dbg_ex_co(co_modem, "TREQ_NETWORK_SEARCH setting flag %x", modem->hook_flag);
+		break;
+		case TREQ_NETWORK_SET_PLMN_SELECTION_MODE:
+			modem->hook_flag |= PS_NETWORK_SELECTION_PENDING;
+			ps_dbg_ex_co(co_modem, "TREQ_NETWORK_SET_PLMN_SELECTION_MODE setting flag %x", modem->hook_flag);
+		break;
+		case TREQ_NETWORK_SET_MODE:
+			modem->hook_flag |= PS_NETWORK_SELECT_MODE;
+			ps_dbg_ex_co(co_modem, "TREQ_NETWORK_SET_MODE setting flag %x", modem->hook_flag);
+		break;
+		case TREQ_NETWORK_SET_DEFAULT_DATA_SUBSCRIPTION:
+			modem->hook_flag |= PS_NETWORK_SET_DEFAULT_DATA_SUBS;
+			ps_dbg_ex_co(co_modem, "TREQ_NETWORK_SET_DEFAULT_DATA_SUBSCRIPTION setting flag %x", modem->hook_flag);
+		break;
+		case TREQ_MODEM_SET_FLIGHTMODE:
+			modem->hook_flag |= PS_NETWORK_SET_FLIGHT_MODE;
+			ps_dbg_ex_co(co_modem, "TREQ_MODEM_SET_FLIGHTMODE setting flag %x", modem->hook_flag);
+		break;
+		case TREQ_MODEM_POWER_OFF:
+			modem->hook_flag |= PS_NETWORK_SET_POWER_OFF;
+			ps_dbg_ex_co(co_modem, "TREQ_MODEM_POWER_OFF setting flag %x", modem->hook_flag);
+		break;
+		case TREQ_MODEM_POWER_LOW:
+			modem->hook_flag |= PS_NETWORK_SET_POWER_LOW;
+			ps_dbg_ex_co(co_modem, "TREQ_MODEM_POWER_LOW setting flag %x", modem->hook_flag);
+		break;
+		case TREQ_SIM_SET_POWERSTATE:
+			modem->hook_flag |= PS_SIM_SET_POWER_STATE;
+			ps_dbg_ex_co(co_modem, "TREQ_SIM_SET_POWERSTATE setting flag %x", modem->hook_flag);
+		break;
+		default:
+			ps_dbg_ex_co(co_modem, "Not handled request");
+		break;
+	}
+}
+
+enum tcore_hook_return ps_handle_hook(Server *s, UserRequest *ur, void *user_data)
+{
+	gboolean ret = FALSE;
+	TReturn rv = TCORE_RETURN_FAILURE;
+
+	CoreObject *co_ps = NULL;
+	GSList *co_ps_list = NULL;
+	TcorePlugin *target_plg = NULL;
+	int value = 0;
+	guint job_cnt = 0;
+	ps_modem_t *modem = user_data;
+	CoreObject *co_modem = _ps_modem_ref_co_modem(modem);
+
+	char *modem_name = NULL;
+	enum tcore_request_command cmd = tcore_user_request_get_command(ur);
+
+	ps_dbg_ex_co(co_modem, "Entered");
+
+	modem_name = tcore_user_request_get_modem_name (ur);
+	if (!modem_name)
+		return TCORE_HOOK_RETURN_CONTINUE;
+
+	target_plg = tcore_object_ref_plugin(modem->co_modem);
+	if( g_strcmp0(tcore_server_get_cp_name_by_plugin(target_plg), modem_name) != 0) {
+		ps_dbg_ex_co(co_modem, "request modem (%s) not matched current modem(%s)",
+				modem_name,
+				tcore_server_get_cp_name_by_plugin(target_plg));
+
+		if( cmd == TREQ_NETWORK_SEARCH ) {
+			co_ps_list = tcore_plugin_get_core_objects_bytype (target_plg, CORE_OBJECT_TYPE_PS);
+			if (!co_ps_list) {
+				ps_dbg_ex_co(co_modem, "No ps core object present ");
+				free(modem_name);
+				return TCORE_HOOK_RETURN_CONTINUE;
+			}
+			co_ps = co_ps_list->data;
+			g_slist_free (co_ps_list);
+
+			if (!co_ps) {
+				ps_dbg_ex_co(co_modem, "No ps core object present ");
+				free(modem_name);
+				return TCORE_HOOK_RETURN_CONTINUE;
+			}
+
+			if(FALSE == tcore_ps_any_context_activating_activated(co_ps, &value)){
+				ps_dbg_ex_co(co_modem, "No activating/activated context present");
+				/* Block PS always-on while network operations. */
+				__ps_modem_set_hook_flag(modem, cmd);
+				tcore_user_request_set_response_hook(ur, __ps_hook_response_cb, modem);
+				free(modem_name);
+				return TCORE_HOOK_RETURN_CONTINUE;
+			}
+
+			ps_dbg_ex_co(co_modem, "Value returned [%d]", value);
+			if(( CONTEXT_STATE_ACTIVATING == value) || ( CONTEXT_STATE_ACTIVATED == value)) {
+				ps_dbg_ex_co(co_modem, "Activated/Activating context present need to deactivate them");
+				rv = tcore_ps_deactivate_contexts(co_ps);
+				if(rv != TCORE_RETURN_SUCCESS){
+					ps_dbg_ex_co(co_modem, "fail to deactivation");
+					free(modem_name);
+					return TCORE_HOOK_RETURN_CONTINUE;
+				}
+				__ps_modem_set_hook_flag(modem, cmd);
+				tcore_user_request_set_response_hook(ur, __ps_hook_response_cb, modem);
+			}
+		}else if(cmd == TREQ_NETWORK_SET_CANCEL_MANUAL_SEARCH){
+			__ps_modem_set_hook_flag(modem, cmd);
+			tcore_user_request_set_response_hook(ur, __ps_hook_response_cb, modem);
+		}
+		free(modem_name);
+		return TCORE_HOOK_RETURN_CONTINUE;
+	}
+
+	if(modem_name)
+		free(modem_name);
+
+	co_ps_list = tcore_plugin_get_core_objects_bytype (target_plg, CORE_OBJECT_TYPE_PS);
+	if (!co_ps_list)
+		return TCORE_HOOK_RETURN_CONTINUE;
+
+	co_ps = co_ps_list->data;
+	g_slist_free (co_ps_list);
+
+	if (!co_ps)
+		return TCORE_HOOK_RETURN_CONTINUE;
+
+	if(FALSE == tcore_ps_any_context_activating_activated(co_ps, &value)){
+		ps_dbg_ex_co(co_modem, "No activating/activated context present");
+		/* Block PS always-on while network operations. */
+		__ps_modem_set_hook_flag(modem, cmd);
+		tcore_user_request_set_response_hook(ur, __ps_hook_response_cb, modem);
+		return TCORE_HOOK_RETURN_CONTINUE;
+	}
+
+	ps_dbg_ex_co(co_modem, "Value returned [%d]", value);
+	if( CONTEXT_STATE_ACTIVATED == value ) {
+		ps_dbg_ex_co(co_modem, "Activated/Activating context present need to deactivate them");
+		rv = tcore_ps_deactivate_contexts(co_ps);
+		if(rv != TCORE_RETURN_SUCCESS){
+			ps_dbg_ex_co(co_modem, "fail to deactivation");
+			return TCORE_HOOK_RETURN_CONTINUE;
+		}
+	} else if ( CONTEXT_STATE_ACTIVATING == value) {
+		if((cmd == TREQ_MODEM_SET_FLIGHTMODE) ||(cmd == TREQ_MODEM_POWER_OFF) ) {
+			ps_dbg_ex_co(co_modem, "No need to stop these request for pdp in activating state ");
+			return TCORE_HOOK_RETURN_CONTINUE;
+		}
+		ps_dbg_ex_co(co_modem, "For rest command will wait for activation successful ");
+	}
+
+	if(!modem->work_queue){
+		ps_err_ex_co(co_modem, "no queue present unable to handle request");
+		return TCORE_HOOK_RETURN_CONTINUE;
+	}
+
+	job_cnt = ps_util_get_count_waiting_job(modem->work_queue, cmd);
+	if(job_cnt){
+		ps_err_ex_co(co_modem, "duplicated job for cmd(%d)", cmd);
+
+		if(cmd == TREQ_NETWORK_SEARCH){
+			struct tresp_network_search search_rsp;
+			memset(&search_rsp, 0, sizeof(struct tresp_network_search));
+
+			search_rsp.result = TCORE_RETURN_OPERATION_ABORTED;
+			search_rsp.list_count = 0;
+			tcore_user_request_send_response(ur, TRESP_NETWORK_SEARCH,
+				sizeof(struct tresp_network_search), &search_rsp);
+		}
+		else if(cmd == TREQ_NETWORK_SET_PLMN_SELECTION_MODE){
+			struct tresp_network_set_plmn_selection_mode set_plmn_mode_rsp;
+			memset(&set_plmn_mode_rsp, 0, sizeof(struct tresp_network_set_plmn_selection_mode));
+
+			set_plmn_mode_rsp.result = TCORE_RETURN_OPERATION_ABORTED;
+			tcore_user_request_send_response(ur, TRESP_NETWORK_SET_PLMN_SELECTION_MODE,
+				sizeof(struct tresp_network_set_plmn_selection_mode), &set_plmn_mode_rsp);
+		}
+		else if(cmd == TREQ_NETWORK_SET_MODE){
+			struct tresp_network_set_mode setmode_rsp;
+			memset(&setmode_rsp, 0, sizeof(struct tresp_network_set_mode));
+
+			setmode_rsp.result = TCORE_RETURN_OPERATION_ABORTED;
+			tcore_user_request_send_response(ur, TRESP_NETWORK_SET_MODE,
+				sizeof(struct tresp_network_set_mode), &setmode_rsp);
+		}
+		else if(cmd == TREQ_NETWORK_SET_CANCEL_MANUAL_SEARCH){
+			struct tresp_network_set_cancel_manual_search search_cancel_rsp;
+			memset(&search_cancel_rsp, 0, sizeof(struct tresp_network_set_cancel_manual_search));
+
+			search_cancel_rsp.result = TCORE_RETURN_OPERATION_ABORTED;
+			tcore_user_request_send_response(ur, TRESP_NETWORK_SET_CANCEL_MANUAL_SEARCH,
+				sizeof(struct tresp_network_set_cancel_manual_search), &search_cancel_rsp);
+		}
+		else if(cmd == TREQ_NETWORK_SET_DEFAULT_DATA_SUBSCRIPTION){
+			struct tresp_network_set_default_data_subscription default_data_rsp;
+			memset(&default_data_rsp, 0, sizeof(struct tresp_network_set_default_data_subscription));
+
+			default_data_rsp.result = TCORE_RETURN_OPERATION_ABORTED;
+			tcore_user_request_send_response(ur, TRESP_NETWORK_SET_DEFAULT_DATA_SUBSCRIPTION,
+				sizeof(struct tresp_network_set_default_data_subscription), &default_data_rsp);
+		}
+		else if (cmd == TREQ_MODEM_SET_FLIGHTMODE) {
+			struct tresp_modem_set_flightmode set_flight_mode;
+			memset(&set_flight_mode, 0, sizeof(struct tresp_modem_set_flightmode));
+
+			set_flight_mode.result = TCORE_RETURN_OPERATION_ABORTED;
+			tcore_user_request_send_response(ur, TRESP_MODEM_SET_FLIGHTMODE,
+				sizeof(struct tresp_modem_set_flightmode), &set_flight_mode);
+
+		}
+		else if (cmd == TREQ_MODEM_POWER_OFF) {
+			struct tresp_modem_power_off set_power_off;
+			memset(&set_power_off,  0, sizeof(struct tresp_modem_power_off));
+
+			set_power_off.result = TCORE_RETURN_OPERATION_ABORTED;
+			tcore_user_request_send_response(ur, TRESP_MODEM_POWER_OFF,
+				sizeof(struct tresp_modem_power_off), &set_power_off);
+
+		}
+		else if (cmd == TREQ_MODEM_POWER_LOW) {
+			struct tresp_modem_power_low set_power_low;
+			memset(&set_power_low, 0, sizeof(struct tresp_modem_power_low));
+
+			set_power_low.result = TCORE_RETURN_OPERATION_ABORTED;
+			tcore_user_request_send_response(ur, TRESP_MODEM_POWER_LOW,
+				sizeof(struct tresp_modem_power_low), &set_power_low);
+
+		}
+		else if (cmd == TREQ_SIM_SET_POWERSTATE) {
+			struct tresp_sim_set_powerstate set_power;
+			memset(&set_power, 0, sizeof(struct tresp_sim_set_powerstate));
+
+			set_power.result = TCORE_RETURN_OPERATION_ABORTED;
+			tcore_user_request_send_response(ur, TRESP_SIM_SET_POWERSTATE,
+				sizeof(struct tresp_sim_set_powerstate), &set_power);
+
+		}
+		tcore_user_request_unref(ur);
+		return TCORE_HOOK_RETURN_STOP_PROPAGATION;
+	}
+
+	ps_dbg_ex_co(co_modem, "Deactivation request is sent, wait for call disconnect notification ");
+
+	if(TREQ_NETWORK_SET_CANCEL_MANUAL_SEARCH == cmd){
+		UserRequest *ur_pending = NULL;
+		ur_pending = ps_util_pop_waiting_job(modem->work_queue, TREQ_NETWORK_SEARCH);
+
+		if(!ur_pending){
+			ps_dbg_ex_co(co_modem, "no pendig search request");
+			tcore_user_request_set_response_hook(ur, __ps_hook_response_cb, modem);
+			return TCORE_HOOK_RETURN_CONTINUE;
+		}
+		else{
+			struct tresp_network_search search_rsp;
+			struct tresp_network_set_cancel_manual_search search_cancel_rsp;
+
+			memset(&search_rsp, 0, sizeof(struct tresp_network_search));
+			memset(&search_cancel_rsp, 0, sizeof(struct tresp_network_set_cancel_manual_search));
+
+			search_rsp.list_count = 0;
+			ps_dbg_ex_co(co_modem, "send search response to upper layer");
+			tcore_user_request_send_response(ur_pending, TRESP_NETWORK_SEARCH, sizeof(struct tresp_network_search), &search_rsp);
+			tcore_user_request_unref(ur_pending);
+
+			tcore_user_request_set_response_hook(ur, __ps_hook_response_cb, modem);
+			search_cancel_rsp.result = TCORE_RETURN_SUCCESS;
+			tcore_user_request_send_response(ur, TRESP_NETWORK_SET_CANCEL_MANUAL_SEARCH,
+				sizeof(struct tresp_network_set_cancel_manual_search), &search_cancel_rsp);
+
+			return TCORE_HOOK_RETURN_STOP_PROPAGATION;
+		}
+	}
+
+	ret = ps_util_add_waiting_job(modem->work_queue, cmd , ur);
+	if(!ret){
+		ps_dbg_ex_co(co_modem, "fail to add the request to queue");
+		return TCORE_HOOK_RETURN_CONTINUE;
+	}
+
+	__ps_modem_set_hook_flag(modem, cmd);
+	return TCORE_HOOK_RETURN_STOP_PROPAGATION;
+}
+
+void __ps_send_pending_user_request(gpointer data)
+{
+	ps_modem_t *modem =  data;
+	GSList *co_list = NULL;
+	CoreObject *co_network = NULL;
+	CoreObject *co_sim = NULL;
+	gpointer *queue_data = NULL;
+
+	co_list = tcore_plugin_get_core_objects_bytype(tcore_object_ref_plugin(modem->co_modem),
+			CORE_OBJECT_TYPE_NETWORK);
+
+	if (G_UNLIKELY(co_list == NULL)) {
+		return ;
+	}
+
+	co_network = (CoreObject *) co_list->data;
+	g_slist_free(co_list);
+
+	co_list = tcore_plugin_get_core_objects_bytype(tcore_object_ref_plugin(modem->co_modem),
+			CORE_OBJECT_TYPE_SIM);
+
+	if (G_UNLIKELY(co_list == NULL)) {
+		return ;
+	}
+
+	co_sim = (CoreObject *) co_list->data;
+	g_slist_free(co_list);
+
+	ps_dbg_ex_co(co_network, "Extracting the user request from the work queue");
+
+	queue_data = g_queue_pop_head(modem->work_queue);
+	while( queue_data) {
+		struct work_queue_data *wqd = (struct work_queue_data *)queue_data ;
+		ps_dbg_ex_co(co_network, " sending Pending request [%x]", wqd ->id);
+		if(wqd->ur) {
+			ps_dbg_ex_co(co_network, "Setting responce hook for request ");
+			tcore_user_request_set_response_hook(wqd->ur, __ps_hook_response_cb, modem);
+
+			switch (wqd ->id) {
+				case TREQ_NETWORK_SEARCH :
+				case TREQ_NETWORK_SET_MODE :
+				case TREQ_NETWORK_SET_PLMN_SELECTION_MODE :
+				case TREQ_NETWORK_SET_DEFAULT_DATA_SUBSCRIPTION :
+					tcore_object_dispatch_request(co_network, wqd->ur);
+					break;
+				case TREQ_MODEM_SET_FLIGHTMODE:
+				case TREQ_MODEM_POWER_OFF:
+				case TREQ_MODEM_POWER_LOW:
+					tcore_object_dispatch_request(modem->co_modem, wqd->ur);
+					break;
+				case TREQ_SIM_SET_POWERSTATE:
+					tcore_object_dispatch_request(co_sim, wqd->ur);
+					break;
+				default :
+				ps_err_ex_co(co_network, "No expected request ");
+			}
+		}
+		queue_data = NULL;
+		queue_data = g_queue_pop_head(modem->work_queue);
+	}
+	ps_dbg_ex_co(co_network, "All pending request sent ");
+}
 
 static enum tcore_hook_return __on_hook_call_status(Server *s, CoreObject *source,
 		enum tcore_notification_command command, unsigned int data_len, void *data,
 		void *user_data)
 {
+	gpointer modem = NULL;
 	gpointer service = user_data;
+	CoreObject *co_network;
+	gpointer co_ps = NULL;
+	GSList *co_list;
+
+	gboolean b_data_allowed = FALSE;
+	gboolean b_roaming_checker = TRUE;
+	gboolean b_mms_checker = FALSE;
+
 	struct tnoti_ps_call_status *cstatus = NULL;
 
 	dbg("call status event");
 	g_return_val_if_fail(service != NULL, TCORE_HOOK_RETURN_STOP_PROPAGATION);
 
+	co_network = _ps_service_ref_co_network(service);
 	cstatus = (struct tnoti_ps_call_status *) data;
-	dbg("call status event cid(%d) state(%d) reason(%d)",
-			cstatus->context_id, cstatus->state, cstatus->result);
+	co_ps = (CoreObject *)_ps_service_ref_co_ps(service);
+	if (co_ps != source) {
+		ps_warn_ex_co(co_network, "Received notification for different Subscription - neglecting the notification!!!");
+		return TCORE_HOOK_RETURN_CONTINUE;
+	}
 
-	//send activation event / deactivation event
-	if (cstatus->state == 1) {/* CONNECTED */
-		dbg("service is activated");
-		_ps_service_set_connected(service, cstatus->context_id, TRUE);
+	modem = _ps_service_ref_modem(service);
+	if(!modem){
+		ps_err_ex_co(co_network, "modem does not exist");
+		return TCORE_HOOK_RETURN_CONTINUE;
 	}
-	else if (cstatus->state == 3) { /* NO CARRIER */
-		dbg("service is deactivated");
-		_ps_service_set_connected(service, cstatus->context_id, FALSE);
+
+	b_data_allowed = _ps_modem_get_data_allowed(modem);
+
+	co_list = tcore_ps_ref_context_by_id(co_ps, cstatus->context_id);
+	for (; co_list; co_list = co_list->next) {
+		CoreObject *co_context = NULL;
+		enum co_context_role role = CONTEXT_ROLE_UNKNOWN;
+
+		co_context = co_list->data;
+		role = tcore_context_get_role(co_context);
+
+		if( role == CONTEXT_ROLE_MMS || role == CONTEXT_ROLE_PREPAID_MMS){
+			b_mms_checker = TRUE;
+			break;
+		}
 	}
+
+#if !defined(TIZEN_SUPPORT_MMS_CONNECT_FORCE)
+		ps_dbg_ex_co(co_network, "csc runtime feature disabled");
+		b_mms_checker = FALSE;
+#endif
+
+	if( (_ps_modem_get_roaming(modem)) && !(_ps_modem_get_data_roaming_allowed(modem)) ){
+		ps_dbg_ex_co(co_network, "roaming network is not allowed");
+		b_roaming_checker = FALSE;
+	}
+
+	ps_dbg_ex_co(co_network, "data_allowed(%d) call status event cid(%d) state(%d) reason(%d)",
+			b_data_allowed, cstatus->context_id, cstatus->state, cstatus->result);
+
+	if( !b_roaming_checker || (!b_data_allowed && !b_mms_checker) ){
+		ps_dbg_ex_co(co_network, "mismatched: roaming checker(%d) data_allowed(%d) mms_checker(%d)",
+			 b_roaming_checker, b_data_allowed, b_mms_checker);
+
+		if(cstatus->state == 0){
+			_ps_service_set_connected(service, cstatus, FALSE);
+			tcore_ps_set_cid_active(co_ps, cstatus->context_id, FALSE);
+			return TCORE_HOOK_RETURN_CONTINUE;
+		}
+		else if(cstatus->state == 1){
+			_ps_service_set_connected(service, cstatus, TRUE);
+			_ps_service_disconnect_contexts(service);
+			return TCORE_HOOK_RETURN_CONTINUE;
+		}
+	}
+
+	ps_dbg_ex_co(co_network, "service(%p) status(%d)", service, cstatus->state);
+	if(cstatus->state == 0){		//DEFINE
+		_ps_service_set_ps_defined(service, TRUE, cstatus->context_id);
+		tcore_ps_set_cid_active(co_ps, cstatus->context_id, TRUE);
+	}
+	else if(cstatus->state == 1){	//CONNECTED
+		TReturn rv;
+
+		if (tcore_ps_get_cid_active(co_ps, cstatus->context_id) == FALSE) {
+			ps_dbg_ex_co(co_network, "DDS scenario");
+
+			/* De-activate context */
+			rv = tcore_ps_deactivate_contexts(co_ps);
+			if(rv != TCORE_RETURN_SUCCESS){
+				ps_dbg_ex_co(co_network, "fail to deactivation");
+				return TCORE_HOOK_RETURN_CONTINUE;
+			}
+		}
+		else {
+			_ps_service_set_connected(service, cstatus, TRUE);
+			tcore_ps_set_cid_connected(co_ps, cstatus->context_id, TRUE);
+
+			if (g_queue_get_length((GQueue *)_ps_modem_ref_work_queue(modem)) || (_ps_modem_get_reset_profile(modem) == TRUE)) {
+				ps_dbg_ex_co(co_network, "Special request present in queue ");
+
+				rv = tcore_ps_deactivate_contexts(co_ps);
+				if(rv != TCORE_RETURN_SUCCESS){
+					ps_dbg_ex_co(co_network,  "fail to deactivation");
+					return TCORE_HOOK_RETURN_CONTINUE;
+				}
+			}
+		}
+	}
+	else if(cstatus->state == 3){	//DISCONNECTED-NO CARRIER
+		gpointer def_context = NULL;
+		unsigned char def_cid = 0;
+		int value = 0;
+
+		if(cstatus->result == 6 || cstatus->result == 11)
+		{
+			ps_dbg_ex_co(co_network, "DO NOT RETRY NETWORK CONNECTION AUTOMATICALLY");
+			ps_dbg_ex_co(co_network, "permanent reject cause (%d)", cstatus->result);
+
+			def_context = _ps_service_return_default_context(service);
+			if(def_context){
+				gpointer co_context = NULL;
+				co_context = _ps_context_ref_co_context(def_context);
+				def_cid = tcore_context_get_id(co_context);
+			}
+		}
+
+		_ps_service_set_ps_defined(service, FALSE, cstatus->context_id);
+		tcore_ps_set_cid_active(co_ps, cstatus->context_id, FALSE);
+		tcore_ps_set_cid_connected(co_ps, cstatus->context_id, FALSE);
+		_ps_service_set_connected(service, cstatus, FALSE);
+
+		if(FALSE == tcore_ps_any_context_activating_activated(co_ps, &value)){
+			ps_dbg_ex_co(co_network, "No open connections, publish disconnected signal");
+
+			/* Handle any pending request if present */
+			modem = _ps_service_ref_modem(service);
+			__ps_send_pending_user_request(modem);
+
+			/* Ensured that set_reset_profile is always done default thread's context */
+			if (_ps_modem_get_reset_profile(modem) == TRUE) {
+				/* Initiate Reset Profile */
+				ps_dbg_ex_co(co_network, "Profiles are being reset");
+				/* Shouldn't invoke set profile directly, as it will remove hooks registered to server while being hook callback*/
+				g_idle_add((GSourceFunc)_ps_modem_initiate_reset_profile, modem);
+			}
+		}
+		ps_dbg_ex_co(co_network, "any context activating or activated [%d]", value);
+
+		if(cstatus->result == 6 || cstatus->result == 11)
+		{
+			if(cstatus->context_id == def_cid){
+				_ps_service_reset_connection_timer(def_context);
+			}
+		}
+	} // disconnected case
 
 	return TCORE_HOOK_RETURN_CONTINUE;
 }
 
-static enum tcore_hook_return __on_hook_session_data_counter(Server *s, CoreObject *source,
+static enum tcore_hook_return __on_hook_call_status_0(Server *s, CoreObject *source,
 		enum tcore_notification_command command, unsigned int data_len, void *data,
 		void *user_data)
 {
-	g_return_val_if_fail(user_data != NULL, TCORE_HOOK_RETURN_STOP_PROPAGATION);
+	return __on_hook_call_status(s, source, command, data_len, data, user_data);
+}
 
-	dbg("session data counter event");
+static enum tcore_hook_return __on_hook_call_status_1(Server *s, CoreObject *source,
+		enum tcore_notification_command command, unsigned int data_len, void *data,
+		void *user_data)
+{
+	return __on_hook_call_status(s, source, command, data_len, data, user_data);
+}
+
+
+static enum tcore_hook_return __on_hook_session_data_counter_0(Server *s, CoreObject *source,
+		enum tcore_notification_command command, unsigned int data_len, void *data,
+		void *user_data)
+{
+	gpointer service = user_data;
+	g_return_val_if_fail(service != NULL, TCORE_HOOK_RETURN_STOP_PROPAGATION);
+
+	ps_dbg_ex_co(_ps_service_ref_co_network(service), "session data counter event");
+
+	return TCORE_HOOK_RETURN_CONTINUE;
+}
+
+static enum tcore_hook_return __on_hook_session_data_counter_1(Server *s, CoreObject *source,
+		enum tcore_notification_command command, unsigned int data_len, void *data,
+		void *user_data)
+{
+	gpointer service = user_data;
+	g_return_val_if_fail(service != NULL, TCORE_HOOK_RETURN_STOP_PROPAGATION);
+
+	ps_dbg_ex_co(_ps_service_ref_co_network(service), "session data counter event");
 
 	return TCORE_HOOK_RETURN_CONTINUE;
 }
@@ -73,61 +780,152 @@ static enum tcore_hook_return __on_hook_ipconfiguration(Server *s, CoreObject *s
 {
 	gpointer service = user_data;
 	CoreObject *co_ps = NULL;
+	CoreObject *co_network = NULL;
 	struct tnoti_ps_pdp_ipconfiguration *devinfo = NULL;
+	char ipv4_dns_1[16], ipv4_dns_2[16];
 
 	g_return_val_if_fail(service != NULL, TCORE_HOOK_RETURN_STOP_PROPAGATION);
 
+	co_network = _ps_service_ref_co_network(service);
 	devinfo = (struct tnoti_ps_pdp_ipconfiguration *) data;
-	co_ps = (CoreObject *) _ps_service_ref_co_ps(service);
-
+	co_ps = (CoreObject *)_ps_service_ref_co_ps(service);
 	if (co_ps != source) {
-		dbg("ps object is different");
+		ps_warn_ex_co(co_network, "Received notification for different Subscription - neglecting the notification!!!");
 		return TCORE_HOOK_RETURN_CONTINUE;
 	}
 
-	dbg("ip configuration event");
+	ps_dbg_ex_co(co_network, "ip configuration event");
+
+	snprintf(ipv4_dns_1, 16, "%d.%d.%d.%d",
+			devinfo->primary_dns[0], devinfo->primary_dns[1], devinfo->primary_dns[2], devinfo->primary_dns[3]);
+	snprintf(ipv4_dns_2, 16, "%d.%d.%d.%d",
+			devinfo->secondary_dns[0], devinfo->secondary_dns[1], devinfo->secondary_dns[2], devinfo->secondary_dns[3]);
+
+	if( g_str_equal(ipv4_dns_1, "0.0.0.0") && g_str_equal(ipv4_dns_2, "0.0.0.0")){
+		ps_err_ex_co(co_network, "primary/secondary dns address is 0");
+
+		//google dns 1st
+		devinfo->primary_dns[0] = 8;
+		devinfo->primary_dns[1] = 8;
+		devinfo->primary_dns[2] = 8;
+		devinfo->primary_dns[3] = 8;
+
+		//open dns 2nd
+		devinfo->secondary_dns[0] = 208;
+		devinfo->secondary_dns[1] = 67;
+		devinfo->secondary_dns[2] = 222;
+		devinfo->secondary_dns[3] = 222;
+	}
+
 	_ps_service_set_context_info(service, devinfo);
 
 	return TCORE_HOOK_RETURN_CONTINUE;
+}
+
+
+static enum tcore_hook_return __on_hook_ipconfiguration_0(Server *s, CoreObject *source,
+		enum tcore_notification_command command, unsigned int data_len, void *data,
+		void *user_data)
+{
+	return __on_hook_ipconfiguration(s, source, command, data_len, data, user_data);
+}
+
+static enum tcore_hook_return __on_hook_ipconfiguration_1(Server *s, CoreObject *source,
+		enum tcore_notification_command command, unsigned int data_len, void *data,
+		void *user_data)
+{
+	return __on_hook_ipconfiguration(s, source, command, data_len, data, user_data);
 }
 
 static enum tcore_hook_return __on_hook_powered(Server *s, CoreObject *source,
 		enum tcore_notification_command command, unsigned int data_len, void *data, void *user_data)
 {
 	gpointer modem = user_data;
+	CoreObject * co_modem;
 	struct tnoti_modem_power *modem_power = NULL;
+	int  power = PS_MODEM_STATE_UNKNOWN;
 
-	gboolean power = FALSE;
+	CORE_OBJECT_CHECK_RETURN(source, CORE_OBJECT_TYPE_MODEM, TCORE_HOOK_RETURN_CONTINUE);
 
-	dbg("powered event called");
-
-	g_return_val_if_fail(modem != NULL, TCORE_HOOK_RETURN_STOP_PROPAGATION);
+	g_return_val_if_fail(modem != NULL, TCORE_HOOK_RETURN_CONTINUE);
+	co_modem = _ps_modem_ref_co_modem(modem);
+	if(source != co_modem) {
+		ps_warn_ex_co(co_modem, "Powered event for other subscription ");
+		return TCORE_HOOK_RETURN_CONTINUE;
+	}
 
 	modem_power = (struct tnoti_modem_power *)data;
+	g_return_val_if_fail(modem_power != NULL, TCORE_HOOK_RETURN_CONTINUE);
+	ps_dbg_ex_co(co_modem, "powered event called: state [%d]", modem_power->state);
 
-	if ( modem_power->state == MODEM_STATE_ONLINE )
-		power = TRUE;
-	else
-		power = FALSE;
+	switch(modem_power->state) {
+		case MODEM_STATE_ONLINE:
+		case MODEM_STATE_RESUME: {
+			power = PS_MODEM_STATE_ONLINE;
+		} break;
+		case MODEM_STATE_LOW: {
+			power = PS_MODEM_STATE_LOW;
+		} break;
+		case MODEM_STATE_OFFLINE:
+		case MODEM_STATE_ERROR:
+		case MODEM_STATE_RESET: {
+			power = PS_MODEM_STATE_OFFLINE;
+		} break;
+		default: {
+			ps_warn_ex_co(co_modem,"Unhandled modem power event." );
+		} break;
+	}
 
-	_ps_modem_processing_power_enable(modem, power);
+	if(power != PS_MODEM_STATE_UNKNOWN)
+		_ps_modem_processing_power_enable(modem, power);
 
 	return TCORE_HOOK_RETURN_CONTINUE;
+}
+
+
+static enum tcore_hook_return __on_hook_powered_0(Server *s, CoreObject *source,
+		enum tcore_notification_command command, unsigned int data_len, void *data, void *user_data)
+{
+	return __on_hook_powered(s, source,	command, data_len, data, user_data);
+}
+
+static enum tcore_hook_return __on_hook_powered_1(Server *s, CoreObject *source,
+		enum tcore_notification_command command, unsigned int data_len, void *data, void *user_data)
+{
+	return __on_hook_powered(s, source,	command, data_len, data, user_data);
 }
 
 static enum tcore_hook_return __on_hook_flight(Server *s, CoreObject *source,
 		enum tcore_notification_command command, unsigned int data_len, void *data, void *user_data)
 {
 	gpointer modem = user_data;
+	CoreObject * co_modem = _ps_modem_ref_co_modem(modem);
 	struct tnoti_modem_flight_mode *modem_flight = NULL;
-	dbg("powered event called");
 
-	g_return_val_if_fail(modem != NULL, TCORE_HOOK_RETURN_STOP_PROPAGATION);
+	g_return_val_if_fail(modem != NULL, TCORE_HOOK_RETURN_CONTINUE);
+	if(source != co_modem) {
+		ps_warn_ex_co(co_modem, "flight mode event for other subscription ");
+		return TCORE_HOOK_RETURN_CONTINUE;
+	}
+
+	ps_dbg_ex_co(co_modem, "flight mode event called");
 
 	modem_flight = (struct tnoti_modem_flight_mode *)data;
 	_ps_modem_processing_flight_mode(modem, modem_flight->enable);
 
 	return TCORE_HOOK_RETURN_CONTINUE;
+}
+
+static enum tcore_hook_return __on_hook_flight_0(Server *s, CoreObject *source,
+		enum tcore_notification_command command, unsigned int data_len, void *data, void *user_data)
+{
+	return __on_hook_flight(s, source, command, data_len, data, user_data);
+}
+
+static enum tcore_hook_return __on_hook_flight_1(Server *s, CoreObject *source,
+		enum tcore_notification_command command, unsigned int data_len, void *data, void *user_data)
+{
+	return __on_hook_flight(s, source, command, data_len, data, user_data);
 }
 
 static enum tcore_hook_return __on_hook_net_register(Server *s, CoreObject *source,
@@ -137,17 +935,40 @@ static enum tcore_hook_return __on_hook_net_register(Server *s, CoreObject *sour
 	gpointer service = user_data;
 	gboolean ps_attached = FALSE;
 	struct tnoti_network_registration_status *regist_status;
-
+	CoreObject *co_network;
 	dbg("network register event called");
-	g_return_val_if_fail(service != NULL, TCORE_HOOK_RETURN_STOP_PROPAGATION);
+
+	g_return_val_if_fail(service != NULL, TCORE_HOOK_RETURN_CONTINUE);
+
+
+	co_network = (CoreObject *)_ps_service_ref_co_network(service);
+	if (co_network != source) {
+		ps_dbg_ex_co(co_network, "Received notification for different Subscription - neglecting the notification!!!");
+		return TCORE_HOOK_RETURN_CONTINUE;
+	}
 
 	regist_status = (struct tnoti_network_registration_status *) data;
 	if (regist_status->ps_domain_status == NETWORK_SERVICE_DOMAIN_STATUS_FULL)
 		ps_attached = TRUE;
 
+	_ps_modem_set_roaming(_ps_service_ref_modem(service), regist_status->roaming_status);
 	_ps_service_processing_network_event(service, ps_attached, regist_status->roaming_status);
 
 	return TCORE_HOOK_RETURN_CONTINUE;
+}
+
+static enum tcore_hook_return __on_hook_net_register_0(Server *s, CoreObject *source,
+		enum tcore_notification_command command, unsigned int data_len, void *data,
+		void *user_data)
+{
+	return __on_hook_net_register(s, source, command, data_len, data, user_data);
+}
+
+static enum tcore_hook_return __on_hook_net_register_1(Server *s, CoreObject *source,
+		enum tcore_notification_command command, unsigned int data_len, void *data,
+		void *user_data)
+{
+	return __on_hook_net_register(s, source, command, data_len, data, user_data);
 }
 
 static enum tcore_hook_return __on_hook_net_change(Server *s, CoreObject *source,
@@ -156,51 +977,232 @@ static enum tcore_hook_return __on_hook_net_change(Server *s, CoreObject *source
 {
 	gpointer service = user_data;
 	struct tnoti_network_change *network_change;
-
+	CoreObject *co_network;
 	dbg("network change event called");
-	g_return_val_if_fail(service != NULL, TCORE_HOOK_RETURN_STOP_PROPAGATION);
+
+	g_return_val_if_fail(service != NULL, TCORE_HOOK_RETURN_CONTINUE);
+
+	co_network = (CoreObject *)_ps_service_ref_co_network(service);
+	if (co_network != source) {
+		ps_dbg_ex_co(co_network, "Received notification for different Subscription - neglecting the notification!!!");
+		return TCORE_HOOK_RETURN_CONTINUE;
+	}
 
 	network_change = (struct tnoti_network_change *) data;
+	ps_dbg_ex_co(co_network, "plmn(%s) act(%d)", network_change->plmn, network_change->act);
 	_ps_service_set_access_technology(service, network_change->act);
 
 	return TCORE_HOOK_RETURN_CONTINUE;
 }
 
+static enum tcore_hook_return __on_hook_net_change_0(Server *s, CoreObject *source,
+		enum tcore_notification_command command, unsigned int data_len, void *data,
+		void *user_data)
+{
+	return __on_hook_net_change(s, source, command, data_len, data, user_data);
+}
+
+static enum tcore_hook_return __on_hook_net_change_1(Server *s, CoreObject *source,
+		enum tcore_notification_command command, unsigned int data_len, void *data,
+		void *user_data)
+{
+	return __on_hook_net_change(s, source, command, data_len, data, user_data);
+}
+
+static enum tcore_hook_return __on_hook_net_restricted_state(Server *s, CoreObject *source,
+		enum tcore_notification_command command, unsigned int data_len, void *data,
+		void *user_data)
+{
+	gpointer service = user_data;
+	struct tnoti_network_restricted_state *network_restricted;
+	CoreObject *co_network;
+	dbg("network restricted event called");
+
+	g_return_val_if_fail(service != NULL, TCORE_HOOK_RETURN_CONTINUE);
+
+	co_network = (CoreObject *)_ps_service_ref_co_network(service);
+	if (co_network != source) {
+		ps_warn_ex_co(co_network, "Received notification for different Subscription - neglecting the notification!!!");
+		return TCORE_HOOK_RETURN_CONTINUE;
+	}
+
+	network_restricted = (struct tnoti_network_restricted_state *) data;
+	ps_dbg_ex_co(co_network, "network restricted state(%d)", network_restricted->restricted_state);
+
+	_ps_service_set_restricted(service, ((network_restricted->restricted_state & NETWORK_RESTRICTED_STATE_PS_ALL) ? TRUE : FALSE));
+
+	return TCORE_HOOK_RETURN_CONTINUE;
+}
+
+static enum tcore_hook_return __on_hook_net_restricted_state_0(Server *s, CoreObject *source,
+		enum tcore_notification_command command, unsigned int data_len, void *data,
+		void *user_data)
+{
+	return __on_hook_net_restricted_state(s, source,command, data_len, data, user_data);
+}
+
+
+static enum tcore_hook_return __on_hook_net_restricted_state_1(Server *s, CoreObject *source,
+		enum tcore_notification_command command, unsigned int data_len, void *data,
+		void *user_data)
+{
+	return __on_hook_net_restricted_state(s, source,command, data_len, data, user_data);
+}
+
+
 static enum tcore_hook_return __on_hook_sim_init(Server *s, CoreObject *source,
 		enum tcore_notification_command command, unsigned int data_len, void *data, void *user_data)
 {
 	struct tnoti_sim_status *sim_data;
+	ps_modem_t *modem = user_data;
+	CoreObject * co_modem = _ps_modem_ref_co_modem(modem);
+	gchar *cp_name, *source_cp_name;
+	ps_dbg_ex_co(co_modem, "sim init event called");
 
-	dbg("sim init event called");
-	g_return_val_if_fail(user_data != NULL, TCORE_HOOK_RETURN_STOP_PROPAGATION);
+	g_return_val_if_fail(user_data != NULL, TCORE_HOOK_RETURN_CONTINUE);
+
+	cp_name = _ps_modem_ref_cp_name(modem);
+	source_cp_name = (gchar *)tcore_server_get_cp_name_by_plugin(tcore_object_ref_plugin(source));
+	if (g_strcmp0(cp_name, source_cp_name) != 0) {
+		ps_warn_ex_co(co_modem, "Received notification for different Subscription - neglecting the notification!!!");
+		return TCORE_HOOK_RETURN_CONTINUE;
+	}
+
 
 	sim_data = (struct tnoti_sim_status *)data;
-	dbg("sim status is (%d)", sim_data->sim_status);
+	ps_dbg_ex_co(co_modem, "sim status is (%d)", sim_data->sim_status);
 
-	if( sim_data->sim_status == SIM_STATUS_INIT_COMPLETED){
-		struct tel_sim_imsi *sim_imsi = NULL;
-		sim_imsi = tcore_sim_get_imsi(source);
-		_ps_modem_processing_sim_complete( (gpointer)user_data, TRUE, (gchar *)sim_imsi->plmn);
-		g_free(sim_imsi);
+	switch (sim_data->sim_status) {
+		case SIM_STATUS_INIT_COMPLETED: {
+			struct tel_sim_imsi *sim_imsi = NULL;
+
+			sim_imsi = tcore_sim_get_imsi(source);
+			_ps_modem_processing_sim_complete((gpointer)user_data, TRUE, (gchar *)sim_imsi->plmn);
+
+			g_free(sim_imsi);
+		} break;
+
+		case SIM_STATUS_CARD_ERROR:			/* FALLTHROUGH */
+		case SIM_STATUS_CARD_REMOVED:		/* FALLTHROUGH */
+		case SIM_STATUS_CARD_CRASHED:		/* FALLTHROUGH */
+		case SIM_STATUS_CARD_POWEROFF: {
+			/* Set SIM complete FALSE, operator is not required */
+			_ps_modem_processing_sim_complete((gpointer)user_data, FALSE, NULL);
+		} break;
+
+		default: {
+			ps_dbg_ex_co(co_modem,  "Unhandled SIM state: [%d]", sim_data->sim_status);
+		} break;
 	}
 
 	return TCORE_HOOK_RETURN_CONTINUE;
+}
+
+
+static enum tcore_hook_return __on_hook_sim_init_0(Server *s, CoreObject *source,
+		enum tcore_notification_command command, unsigned int data_len, void *data, void *user_data)
+{
+	return  __on_hook_sim_init(s, source, command,  data_len, data, user_data);
+}
+
+static enum tcore_hook_return __on_hook_sim_init_1(Server *s, CoreObject *source,
+		enum tcore_notification_command command, unsigned int data_len, void *data, void *user_data)
+{
+	return  __on_hook_sim_init(s, source, command,  data_len, data, user_data);
+}
+
+void _ps_get_network_mode(gpointer data)
+{
+	UserRequest *ur = NULL;
+	ps_modem_t *modem =  data;
+
+	GSList *co_list = NULL;
+	CoreObject *co_network = NULL;
+
+	ps_dbg_ex_co(_ps_modem_ref_co_modem(modem), "network get mode by data allowed option");
+
+	co_list = tcore_plugin_get_core_objects_bytype(tcore_object_ref_plugin(modem->co_modem),
+			CORE_OBJECT_TYPE_NETWORK);
+
+	if (G_UNLIKELY(co_list == NULL)) {
+		return ;
+	}
+
+	co_network = (CoreObject *) co_list->data;
+
+	ur = tcore_user_request_new(NULL, NULL);
+	tcore_user_request_set_data(ur, 0, NULL);
+	tcore_user_request_set_command(ur, TREQ_NETWORK_GET_MODE);
+	tcore_user_request_set_response_hook(ur, __ps_hook_response_cb, modem);
+
+	__ps_modem_set_hook_flag(modem, TREQ_NETWORK_GET_MODE);
+
+	tcore_object_dispatch_request(co_network, ur);
+	g_slist_free(co_list);
+
+	return;
 }
 
 gboolean _ps_hook_co_modem_event(gpointer modem)
 {
 	Server *s = NULL;
 	TcorePlugin *p;
+	CoreObject *co_modem;
+	const char *modem_name = NULL;
 	g_return_val_if_fail(modem != NULL, FALSE);
 
 	p = _ps_modem_ref_plugin(modem);
 	s = tcore_plugin_ref_server(p);
+	co_modem = _ps_modem_ref_co_modem(modem);
 
-	tcore_server_add_notification_hook(s, TNOTI_MODEM_POWER, __on_hook_powered, modem);
-	tcore_server_add_notification_hook(s, TNOTI_MODEM_FLIGHT_MODE, __on_hook_flight, modem);
-	tcore_server_add_notification_hook(s, TNOTI_SIM_STATUS, __on_hook_sim_init, modem);
-
+	modem_name = tcore_server_get_cp_name_by_plugin(tcore_object_ref_plugin(co_modem));
+	if( TRUE == g_str_has_suffix(modem_name , "0")) {
+		tcore_server_add_notification_hook(s, TNOTI_MODEM_POWER, __on_hook_powered_0, modem);
+		tcore_server_add_notification_hook(s, TNOTI_MODEM_FLIGHT_MODE, __on_hook_flight_0, modem);
+		tcore_server_add_notification_hook(s, TNOTI_SIM_STATUS, __on_hook_sim_init_0, modem);
+	} else {
+		tcore_server_add_notification_hook(s, TNOTI_MODEM_POWER, __on_hook_powered_1, modem);
+		tcore_server_add_notification_hook(s, TNOTI_MODEM_FLIGHT_MODE, __on_hook_flight_1, modem);
+		tcore_server_add_notification_hook(s, TNOTI_SIM_STATUS, __on_hook_sim_init_1, modem);
+	}
 	return TRUE;
+}
+
+gboolean _ps_free_co_modem_event(gpointer modem)
+{
+	Server *s = NULL;
+	TcorePlugin *p;
+	CoreObject *co_modem;
+	const char *modem_name = NULL;
+	g_return_val_if_fail(modem != NULL, FALSE);
+
+	p = _ps_modem_ref_plugin(modem);
+	s = tcore_plugin_ref_server(p);
+	co_modem = _ps_modem_ref_co_modem(modem);
+
+	modem_name = tcore_server_get_cp_name_by_plugin(tcore_object_ref_plugin(co_modem));
+	if( TRUE == g_str_has_suffix(modem_name , "0")) {
+		tcore_server_remove_notification_hook(s, __on_hook_powered_0);
+		tcore_server_remove_notification_hook(s, __on_hook_flight_0);
+		tcore_server_remove_notification_hook(s, __on_hook_sim_init_0);
+	} else {
+		tcore_server_remove_notification_hook(s, __on_hook_powered_1);
+		tcore_server_remove_notification_hook(s, __on_hook_flight_1);
+		tcore_server_remove_notification_hook(s, __on_hook_sim_init_1);
+	}
+	return TRUE;
+}
+
+enum tcore_hook_return __on_hook_modem_added(Server *s,
+		CoreObject *source, enum tcore_notification_command command,
+		unsigned int data_len, void *data, void *user_data)
+{
+	gpointer *master = user_data;
+	TcorePlugin *plg = data;
+	if(FALSE == _ps_master_create_modems(master, plg)){
+		err("Failed to create modem");
+	}
+	return TCORE_HOOK_RETURN_CONTINUE;
 }
 
 gboolean _ps_get_co_modem_values(gpointer modem)
@@ -251,15 +1253,25 @@ gboolean _ps_hook_co_network_event(gpointer service)
 {
 	Server *s = NULL;
 	TcorePlugin *p;
+	CoreObject *co_network = NULL;
+	const char *modem_name = NULL;
 
 	g_return_val_if_fail(service != NULL, FALSE);
 
 	p = _ps_service_ref_plugin(service);
 	s = tcore_plugin_ref_server(p);
+	co_network = _ps_service_ref_co_network(service);
 
-	tcore_server_add_notification_hook(s, TNOTI_NETWORK_REGISTRATION_STATUS, __on_hook_net_register, service);
-	tcore_server_add_notification_hook(s, TNOTI_NETWORK_CHANGE, __on_hook_net_change, service);
-
+	modem_name = tcore_server_get_cp_name_by_plugin(tcore_object_ref_plugin(co_network));
+	if( TRUE == g_str_has_suffix(modem_name , "0")) {
+		tcore_server_add_notification_hook(s, TNOTI_NETWORK_REGISTRATION_STATUS, __on_hook_net_register_0, service);
+		tcore_server_add_notification_hook(s, TNOTI_NETWORK_CHANGE, __on_hook_net_change_0, service);
+		tcore_server_add_notification_hook(s, TNOTI_NETWORK_RESTRICTED_STATE, __on_hook_net_restricted_state_0, service);
+	} else {
+		tcore_server_add_notification_hook(s, TNOTI_NETWORK_REGISTRATION_STATUS, __on_hook_net_register_1, service);
+		tcore_server_add_notification_hook(s, TNOTI_NETWORK_CHANGE, __on_hook_net_change_1, service);
+		tcore_server_add_notification_hook(s, TNOTI_NETWORK_RESTRICTED_STATE, __on_hook_net_restricted_state_1, service);
+	}
 	return TRUE;
 }
 
@@ -267,6 +1279,7 @@ gboolean _ps_get_co_network_values(gpointer service)
 {
 	CoreObject *co_network = NULL;
 	gboolean ps_attached = FALSE;
+	gint ps_restricted = 0;
 
 	enum telephony_network_service_domain_status ps_status;
 	enum telephony_network_access_technology act;
@@ -274,6 +1287,7 @@ gboolean _ps_get_co_network_values(gpointer service)
 	g_return_val_if_fail(service != NULL, FALSE);
 
 	co_network = _ps_service_ref_co_network(service);
+	ps_dbg_ex_co(co_network, "Entered ");
 
 	tcore_network_get_service_status(co_network, TCORE_NETWORK_SERVICE_DOMAIN_TYPE_PACKET, &ps_status);
 	tcore_network_get_access_technology(co_network, &act);
@@ -281,6 +1295,9 @@ gboolean _ps_get_co_network_values(gpointer service)
 	if (ps_status == NETWORK_SERVICE_DOMAIN_STATUS_FULL)
 		ps_attached = TRUE;
 
+	ps_restricted = tcore_network_get_restricted_state(co_network);
+
+	_ps_service_set_restricted(service, ((ps_restricted == NETWORK_RESTRICTED_STATE_PS_ALL) ? TRUE : FALSE));
 	_ps_service_set_roaming(service, tcore_network_get_roaming_state(co_network));
 	_ps_service_set_ps_attached(service, ps_attached);
 	_ps_service_set_access_technology(service, act);
@@ -292,35 +1309,119 @@ gboolean _ps_hook_co_ps_event(gpointer service)
 {
 	Server *s = NULL;
 	TcorePlugin *p;
+	CoreObject *co_ps = NULL;
+	const char *modem_name = NULL;
 	g_return_val_if_fail(service != NULL, FALSE);
 
+	ps_dbg_ex_co(_ps_service_ref_co_network(service), "Entered ");
 	p = _ps_service_ref_plugin(service);
 	s = tcore_plugin_ref_server(p);
+	co_ps = _ps_service_ref_co_ps(service);
 
-	tcore_server_add_notification_hook(s, TNOTI_PS_CALL_STATUS, __on_hook_call_status, service);
-	tcore_server_add_notification_hook(s, TNOTI_PS_CURRENT_SESSION_DATA_COUNTER, __on_hook_session_data_counter, service);
-	tcore_server_add_notification_hook(s, TNOTI_PS_PDP_IPCONFIGURATION, __on_hook_ipconfiguration, service);
-
+	modem_name = tcore_server_get_cp_name_by_plugin(tcore_object_ref_plugin(co_ps));
+	if( TRUE == g_str_has_suffix(modem_name , "0")) {
+		tcore_server_add_notification_hook(s, TNOTI_PS_CALL_STATUS, __on_hook_call_status_0, service);
+		tcore_server_add_notification_hook(s, TNOTI_PS_CURRENT_SESSION_DATA_COUNTER, __on_hook_session_data_counter_0, service);
+		tcore_server_add_notification_hook(s, TNOTI_PS_PDP_IPCONFIGURATION, __on_hook_ipconfiguration_0, service);
+	} else {
+		tcore_server_add_notification_hook(s, TNOTI_PS_CALL_STATUS, __on_hook_call_status_1, service);
+		tcore_server_add_notification_hook(s, TNOTI_PS_CURRENT_SESSION_DATA_COUNTER, __on_hook_session_data_counter_1, service);
+		tcore_server_add_notification_hook(s, TNOTI_PS_PDP_IPCONFIGURATION, __on_hook_ipconfiguration_1, service);
+	}
 	return TRUE;
 }
 
-gboolean _ps_update_cellular_state_key(gpointer service)
+gboolean _ps_free_co_ps_event(gpointer service)
 {
 	Server *s = NULL;
-	gpointer handle = NULL;
-	static Storage *strg;
-	int err_reason = 0;
+	TcorePlugin *p;
+	CoreObject *co_ps = NULL;
+	CoreObject * co_network;
+	const char * modem_name = NULL;
 
-	s = tcore_plugin_ref_server( (TcorePlugin *)_ps_service_ref_plugin(service) );
+	g_return_val_if_fail(service != NULL, FALSE);
+	co_network = _ps_service_ref_co_network(service);
+
+	ps_dbg_ex_co(co_network, "Entered ");
+	p = _ps_service_ref_plugin(service);
+	s = tcore_plugin_ref_server(p);
+	co_ps = _ps_service_ref_co_ps(service);
+
+	modem_name = tcore_server_get_cp_name_by_plugin(tcore_object_ref_plugin(co_ps));
+	if(modem_name){
+		ps_dbg_ex_co(co_network, "modem name %s", modem_name);
+	}
+	if( TRUE == g_str_has_suffix(modem_name , "0")) {
+		tcore_server_remove_notification_hook(s, __on_hook_call_status_0);
+		tcore_server_remove_notification_hook(s, __on_hook_session_data_counter_0);
+		tcore_server_remove_notification_hook(s, __on_hook_ipconfiguration_0);
+	 } else {
+		tcore_server_remove_notification_hook(s, __on_hook_call_status_1);
+		tcore_server_remove_notification_hook(s, __on_hook_session_data_counter_1);
+		tcore_server_remove_notification_hook(s, __on_hook_ipconfiguration_1);
+	 }
+	 return TRUE;
+}
+
+gboolean _ps_free_co_network_event(gpointer service)
+{
+	Server *s = NULL;
+	TcorePlugin *p;
+	CoreObject *co_network = NULL;
+	const char *modem_name = NULL;
+	g_return_val_if_fail(service != NULL, FALSE);
+
+	ps_dbg_ex_co(_ps_service_ref_co_network(service), "Entered ");
+	p = _ps_service_ref_plugin(service);
+	s = tcore_plugin_ref_server(p);
+	co_network = _ps_service_ref_co_network(service);
+
+	modem_name = tcore_server_get_cp_name_by_plugin(tcore_object_ref_plugin(co_network));
+	if( TRUE == g_str_has_suffix(modem_name , "0")) {
+		tcore_server_remove_notification_hook(s, __on_hook_net_register_0);
+		tcore_server_remove_notification_hook(s, __on_hook_net_change_0);
+		tcore_server_remove_notification_hook(s, __on_hook_net_restricted_state_0);
+	} else {
+		tcore_server_remove_notification_hook(s, __on_hook_net_register_1);
+		tcore_server_remove_notification_hook(s, __on_hook_net_change_1);
+		tcore_server_remove_notification_hook(s, __on_hook_net_restricted_state_1);
+	}
+	return TRUE;
+}
+
+gboolean _ps_update_cellular_state_key(gpointer object)
+{
+	Server *s = NULL;
+	static Storage *strg;
+	int current_state = 0;
+	int stored_state = 0;
+	ps_service_t *service = object;
+	CoreObject * co_network = _ps_service_ref_co_network(service);
+	ps_modem_t *modem = _ps_service_ref_modem(service);
+	ps_subs_type subs_type = _ps_modem_get_subs_type(modem);
+	int selected_sim = -1;
+
+	ps_dbg_ex_co(co_network, "Update cellular state for [SIM%d]", subs_type + 1);
+
+	s = tcore_plugin_ref_server(_ps_service_ref_plugin(service));
 	strg = tcore_server_find_storage(s, "vconf");
-	handle = tcore_storage_create_handle(strg, "vconf");
-	if (!handle){
-		err("fail to create vconf handle");
+
+	selected_sim = tcore_storage_get_int(strg, STORAGE_KEY_TELEPHONY_DUALSIM_DEFAULT_DATA_SERVICE_INT);
+	if ((selected_sim != -1) &&(selected_sim != (int)subs_type)) {
+		ps_warn_ex_co(co_network, "Update for only [SIM%d] selected by Setting", selected_sim + 1);
 		return FALSE;
 	}
 
-	err_reason = _ps_service_check_cellular_state(service);
-	tcore_storage_set_int(strg,STORAGE_KEY_CELLULAR_STATE, err_reason);
+	current_state = _ps_service_check_cellular_state(service);
+
+	if (tcore_modem_get_flight_mode_state(modem->co_modem) == TRUE)
+		current_state = TELEPHONY_PS_FLIGHT_MODE;
+
+	stored_state = tcore_storage_get_int(strg, STORAGE_KEY_CELLULAR_STATE);
+	ps_dbg_ex_co(co_network, "Cellular state, current: [%d], stored: [%d]", current_state, stored_state);
+	if (current_state != stored_state)
+		tcore_storage_set_int(strg, STORAGE_KEY_CELLULAR_STATE, current_state);
 
 	return TRUE;
 }
+
