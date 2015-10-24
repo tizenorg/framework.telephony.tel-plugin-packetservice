@@ -3,6 +3,10 @@
 		<method name="GetModems">
 			<arg  type="a{sa{ss}}" name="modem_hash" direction="out" />
 		</method>
+		<method name="SetAlwayson">
+			<arg  type="b" name="enable" direction="in" />
+			<arg  type="b" name="result" direction="out" />
+		</method>
 		<signal name="ModemAdded">
 			<arg  type="a{ss}" name="modem" direction="out" />
 		</signal>

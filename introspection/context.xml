@@ -25,6 +25,9 @@
 		<signal name="PropertyChanged">
 			<arg type="a{ss}" name="context_property" direction="out" />
 		</signal>
+		<signal name="DedicatedBearerInfo">
+			<arg  type="a{ss}" name="dedicated_bearer" direction="out" />
+		</signal>
 	</interface>
 </node>
 

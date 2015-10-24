@@ -1,0 +1,62 @@
+.cproject
+.project
+*.substvars
+*.deb
+*.debhelper
+cmake_tmp
+build-stamp
+configure-stamp
+*.debhelper.log
+*.changes
+*-0.install
+*-0-dbg
+*-dev.install
+*.o
+tags
+files
+stamp-*
+*/debian/*/
+cmake_install.cmake
+CMakeFiles/
+*.so
+*.so.*
+CMakeCache.txt
+.*.swp
+documentation.list
+install_manifest.txt
+*.pc
+
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+.elc
+auto-save-list
+tramp
+.\#*
+
+# Org-mode
+.org-id-locations
+*_archive
+
+# Object files
+*.o
+
+# Libraries
+*.lib
+*.a
+
+# Shared objects (inc. Windows DLLs)
+*.dll
+*.so
+*.so.*
+*.dylib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# Patches
+*.patch
+*.diff

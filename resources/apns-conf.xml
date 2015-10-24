@@ -13891,4 +13891,41 @@
         authtype="3"
         type="*"
    />
+
+<!--End(6): Tizen platform-->
+   <apn carrier="GCF Lab.1"
+        mcc="001"
+        mnc="01"
+        apn="test"
+        type="default,mms"
+   />
+
+   <apn carrier="GCF Lab.2"
+        mcc="999"
+        mnc="99"
+        apn="test"
+        type="default,mms"
+   />
+
+   <apn carrier="TestBed 2"
+        mcc="001"
+        mnc="02"
+        apn="annam.dyn"
+        user="mms"
+        password="mms"
+        mmsc="http://10.200.60.21:8088/mms"
+        mmsproxy = "10.200.60.15"
+        mmsport = "3128"
+        authtype="0"
+        type="default,mms"
+   />
+
+   <apn carrier="TestBed 2 IMS"
+        mcc="001"
+        mnc="02"
+        apn="ims"
+	protocol="IPV6"
+        authtype="0"
+        type="ims"
+   />
 </apns>

@@ -4,6 +4,7 @@
  * Copyright (c) 2012 Samsung Electronics Co., Ltd. All rights reserved.
  *
  * Contact: DongHoo Park <donghoo.park@samsung.com>
+ *			Arun Shukla <arun.shukla@samsung.com>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,18 +20,44 @@
  *
  */
 
-#include <tcore.h>
-#include <server.h>
-#include <core_object.h>
+#include <stdio.h>
 
 #include <glib.h>
 
-gchar *ps_log_get_tag(CoreObject *co);
+#include <tcore.h>
+#include <plugin.h>
 
-gchar *ps_log_get_tag(CoreObject *co)
+#include "ps_main.h"
+
+static gboolean on_load()
 {
-	const char *cp_name;
-	cp_name = tcore_server_get_cp_name_by_plugin(tcore_object_ref_plugin(co));
+	dbg("i'm load!");
 
-	return g_strdup_printf("PS/%s", cp_name);
+	return TRUE;
 }
+
+static gboolean on_init(TcorePlugin *plugin)
+{
+	dbg("i'm init!");
+
+	return ps_main_init(plugin);
+}
+
+static void on_unload(TcorePlugin *plugin)
+{
+	dbg("i'm unload!");
+
+	ps_main_exit(plugin);
+}
+
+/*
+ * Packet service plug-in descriptor structure
+ */
+EXPORT_API struct tcore_plugin_define_desc plugin_define_desc = {
+	.name = "PACKETSERVICE",
+	.priority = TCORE_PLUGIN_PRIORITY_MID + 1,
+	.version = 1,
+	.load = on_load,
+	.init = on_init,
+	.unload = on_unload
+};

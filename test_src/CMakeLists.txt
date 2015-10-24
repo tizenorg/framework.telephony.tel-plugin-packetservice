@@ -1,0 +1,10 @@
+CMAKE_MINIMUM_REQUIRED(VERSION 2.6)
+PROJECT(apnbuilder C)
+
+SET(apnbuilder
+	main.c
+)
+
+ADD_EXECUTABLE(apnbuilder ${apnbuilder})
+TARGET_LINK_LIBRARIES(apnbuilder ${pkgs_LDFLAGS} "-L${CMAKE_BINARY_DIR} -ltcore")
+INSTALL(TARGETS apnbuilder RUNTIME DESTINATION ${TIZEN_TEST_BIN_DIR})

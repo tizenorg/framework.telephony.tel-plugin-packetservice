@@ -4,6 +4,7 @@
  * Copyright (c) 2012 Samsung Electronics Co., Ltd. All rights reserved.
  *
  * Contact: DongHoo Park <donghoo.park@samsung.com>
+ *			Arun Shukla <arun.shukla@samsung.com>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,18 +20,11 @@
  *
  */
 
-#include <tcore.h>
-#include <server.h>
-#include <core_object.h>
+#ifndef __PS_MAIN_H__
+#define __PS_MAIN_H__
 
-#include <glib.h>
+gboolean ps_main_init(TcorePlugin *plugin);
 
-gchar *ps_log_get_tag(CoreObject *co);
+void ps_main_exit(TcorePlugin *plugin);
 
-gchar *ps_log_get_tag(CoreObject *co)
-{
-	const char *cp_name;
-	cp_name = tcore_server_get_cp_name_by_plugin(tcore_object_ref_plugin(co));
-
-	return g_strdup_printf("PS/%s", cp_name);
-}
+#endif /* __PS_MAIN_H__ */
