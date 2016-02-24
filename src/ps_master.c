@@ -224,7 +224,30 @@ static void __ps_master_storage_key_callback(enum tcore_storage_key key, void *v
 			_ps_modem_set_data_roaming_allowed(h_value, roaming_allowed);
 		} else if (key == KEY_POWER_SAVING_MODE) {
 			gint ps_mode = g_variant_get_int32(tmp);
+#ifdef POWER_SAVING_FEATURE_WEARABLE
+			gboolean f_mode = _ps_modem_get_flght_mode(h_value);
+			gboolean f_mode_ups = _ps_modem_get_flght_mode_ups(h_value);
+			struct treq_modem_set_flightmode data = {0};
+			dbg("f_mode: %d, f_mode_ups: %d", f_mode, f_mode_ups);
 
+			if (ps_mode == POWER_SAVING_MODE_NORMAL) {
+				if (f_mode_ups != f_mode) {
+					dbg("set flight mode off");
+					data.enable = f_mode_ups;
+				}
+			} else if (ps_mode == POWER_SAVING_MODE_WEARABLE) {
+				if (!f_mode) {
+					dbg("set flight mode on");
+					/* save flight mode state when UPS off. */
+					_ps_modem_set_flght_mode_ups(h_value, _ps_modem_get_flght_mode(h_value));
+					data.enable = TRUE;
+				}
+			} else {
+				err("Not supported");
+				return;
+			}
+			_ps_modem_send_filght_mode_request(h_value, &data);
+#endif
 			if (ps_mode == POWER_SAVING_MODE_NORMAL && ps_mode != _ps_modem_get_psmode(h_value))
 				warn("[PSINFO] UPS mode change: On -> Off ");
 
@@ -560,39 +583,6 @@ gboolean _ps_master_set_storage_value_int(gpointer object, enum tcore_storage_ke
 	return tcore_storage_set_int(strg, key, value);
 }
 
-gboolean _ps_master_set_always_on_control(gpointer user_data, gboolean enable)
-{
-	ps_master_t *master = user_data;
-	GHashTableIter iter;
-	gpointer key, value;
-
-	g_return_val_if_fail(master != NULL, FALSE);
-	g_return_val_if_fail(master->modems != NULL, FALSE);
-
-	dbg("Entered");
-
-	g_hash_table_iter_init(&iter, master->modems);
-	while (g_hash_table_iter_next(&iter, &key, &value) == TRUE) {
-		unsigned int i;
-		ps_modem_t *modem = value;
-
-		if (modem == NULL)
-			continue;
-		if (modem->contexts == NULL)
-			continue;
-
-		for (i = 0; i < g_slist_length(modem->contexts); i++) {
-			ps_context_t *context = (ps_context_t*)g_slist_nth_data(modem->contexts, i);
-			gchar *path = _ps_context_ref_path(context);
-			if (path) {
-				dbg("context(%s)", path);
-				_ps_context_set_alwayson_enable(context, enable);
-			}
-		}
-	}
-	return TRUE;
-}
-
 static gboolean on_master_get_modems(PacketServiceMaster *obj_master,
 		GDBusMethodInvocation *invocation,
 		gpointer user_data)
@@ -640,26 +630,6 @@ static gboolean on_master_get_modems(PacketServiceMaster *obj_master,
 	return TRUE;
 }
 
-static gboolean on_master_set_alwayson(PacketServiceMaster *obj_master,
-		GDBusMethodInvocation *invocation,
-		gboolean enable,
-		gpointer user_data)
-{
-	gboolean result = FALSE;
-
-	if (!ps_util_check_access_control(invocation, AC_PS_PRIVATE, "w"))
-		return TRUE;
-
-	dbg("Entered");	
-	result = _ps_master_set_always_on_control(user_data, enable);
-	if (result)
-		packet_service_master_complete_set_alwayson(obj_master, invocation, result);
-	else
-		FAIL_RESPONSE(invocation, PS_ERR_INTERNAL);
-	return TRUE;
-}
-
-
 static void _ps_master_setup_interface(PacketServiceMaster *master, ps_master_t *master_data)
 {
 	dbg("Entered");
@@ -667,11 +637,6 @@ static void _ps_master_setup_interface(PacketServiceMaster *master, ps_master_t 
 	g_signal_connect(master,
 			"handle-get-modems",
 			G_CALLBACK(on_master_get_modems),
-			master_data);
-
-	g_signal_connect(master,
-			"handle-set-alwayson",
-			G_CALLBACK(on_master_set_alwayson),
 			master_data);
 	return;
 

@@ -285,6 +285,9 @@ static void __ps_modem_get_ps_setting_from_storage(ps_modem_t *object)
 	gint key_ps_mode = 0;
 	ps_modem_t *modem = NULL;
 	CoreObject *co_modem;
+#if defined(TIZEN_UPS_ENABLED)
+	struct treq_modem_set_flightmode data = {0};
+#endif
 
 	modem = (ps_modem_t *) object;
 	co_modem = _ps_modem_ref_co_modem(modem);
@@ -298,6 +301,18 @@ static void __ps_modem_get_ps_setting_from_storage(ps_modem_t *object)
 
 #if defined(TIZEN_UPS_ENABLED)
 	_ps_modem_set_psmode(modem, key_ps_mode);
+	if (key_ps_mode == POWER_SAVING_MODE_NORMAL) {
+		dbg("set flight mode off");
+		data.enable = FALSE;
+	} else if (key_ps_mode == POWER_SAVING_MODE_WEARABLE) {
+		dbg("set flight mode on");
+		data.enable = TRUE;
+	} else {
+		err("Not supported");
+		goto OUT;
+	}
+	_ps_modem_send_filght_mode_request(modem, &data);
+OUT:
 #endif
 	ps_dbg_ex_co(co_modem, "data allowed(%d) roaming allowed(%d) power saving mode(%d), network restrict mode (%d)",
 		key_3g_enable, key_roaming_allowed, key_ps_mode, key_nw_restrict_mode);
@@ -334,7 +349,7 @@ static void __ps_modem_processing_modem_event(gpointer object)
 			_ps_service_disconnect_contexts(value);
 			continue;
 		} else if (!modem->data_allowed) {
-			_ps_service_disconnect_internet_mms_tethering_contexts(value);
+			_ps_service_disconnect_internet_mms_contexts(value);
 			continue;
 		}
 
@@ -476,6 +491,34 @@ void _ps_modem_destroy_modem(GDBusConnection *conn, gpointer object)
 	/* Clear modem hooks */
 	_ps_free_co_modem_event(modem);
 }
+
+gboolean _ps_modem_send_filght_mode_request(gpointer value, void *data)
+{
+	CoreObject *co_modem = NULL, *co_ps = NULL;
+	UserRequest *ur = NULL;
+	ps_modem_t *modem = value;
+	TReturn rv;
+
+	co_modem = _ps_modem_ref_co_modem(modem);
+	co_ps = tcore_plugin_ref_core_object(tcore_object_ref_plugin(co_modem), CORE_OBJECT_TYPE_PS);
+	/* deactivate contexts first. */
+	rv = tcore_ps_deactivate_contexts(co_ps);
+	if (rv != TCORE_RETURN_SUCCESS)
+		ps_dbg_ex_co(co_ps, "fail to deactivation");
+
+	tcore_ps_set_online(co_ps, FALSE);
+
+	ur = tcore_user_request_new(NULL, NULL);
+	tcore_user_request_set_data(ur, sizeof(struct treq_modem_set_flightmode), data);
+	tcore_user_request_set_command(ur, TREQ_MODEM_SET_FLIGHTMODE);
+	if (TCORE_RETURN_SUCCESS != tcore_object_dispatch_request(co_modem, ur)) {
+		err("fail to send user request");
+		tcore_user_request_unref(ur);
+		return FALSE;
+	}
+	return TRUE;
+}
+
 gboolean _ps_modem_processing_flight_mode(gpointer object, gboolean enable)
 {
 	ps_modem_t *modem = object;
@@ -806,6 +849,25 @@ gboolean _ps_modem_get_flght_mode(gpointer object)
 	return modem->flight_mode;
 }
 
+void _ps_modem_set_flght_mode_ups(gpointer object, gboolean value)
+{
+	ps_modem_t *modem = object;
+	g_return_if_fail(modem != NULL);
+
+	modem->flight_mode_ups = value;
+	dbg("modem(%p) flight_mode_ups(%d)", modem, modem->flight_mode_ups);
+
+	return;
+}
+
+gboolean _ps_modem_get_flght_mode_ups(gpointer object)
+{
+	ps_modem_t *modem = object;
+	g_return_val_if_fail(modem != NULL, FALSE);
+
+	return modem->flight_mode_ups;
+}
+
 gboolean _ps_modem_get_sim_init(gpointer object)
 {
 	ps_modem_t *modem = object;
@@ -894,14 +956,6 @@ GVariant *_ps_modem_get_properties(gpointer object, GVariantBuilder *properties)
 
 	dbg("Exiting");
 	return g_variant_builder_end(properties);
-}
-
-gpointer _ps_modem_ref_master(gpointer object)
-{
-	ps_modem_t *modem = object;
-	g_return_val_if_fail(modem != NULL, NULL);
-
-	return modem->p_master;
 }
 
 GHashTable *_ps_modem_ref_services(gpointer object)

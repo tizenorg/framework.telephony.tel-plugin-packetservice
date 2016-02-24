@@ -473,22 +473,12 @@ static gboolean __ps_context_create_co_context(gpointer object, GHashTable *prop
 	tcore_context_set_roaming_apn(co_context, is_roaming_apn);
 
 	context->profile_id = profile_id;
+	context->hidden = hidden;
 	context->editable = editable;
 	context->is_default = default_conn;
 	_ps_context_set_profile_enable(context, profile_enable);
 	context->path = path;
 	context->co_context = co_context;
-	switch(svc_ctg_id) {
-	case CONTEXT_ROLE_INTERNET:
-	case CONTEXT_ROLE_MMS:
-	case CONTEXT_ROLE_PREPAID_INTERNET:
-	case CONTEXT_ROLE_PREPAID_MMS:
-		context->hidden = hidden;
-		break;
-	default:
-		context->hidden = TRUE;
-		break;
-	}
 
 	g_free(profile_name);
 	g_free(apn);
@@ -2514,14 +2504,9 @@ TReturn _ps_connection_hdlr(gpointer object)
 {
 	int rv = TCORE_RETURN_FAILURE;
 	ps_context_t *pscontext = object;
-	ps_service_t *service = _ps_context_ref_service(pscontext);
-	CoreObject *co_network = _ps_service_ref_co_network(service);
+	CoreObject *co_network = _ps_service_ref_co_network(_ps_context_ref_service(pscontext));
 
-	/* TBD: dbus method invocation from upper layer. */
-	if (TRUE == _ps_context_get_default_context(pscontext, CONTEXT_ROLE_INTERNET)) {
-		ps_dbg_ex_co(co_network, "Change Always-on when default internet.");
-		_ps_master_set_always_on_control(_ps_modem_ref_master(_ps_service_ref_modem(service)), TRUE);
-	}
+	_ps_context_set_alwayson_enable(pscontext, TRUE);
 	rv = _ps_service_activate_context(pscontext->p_service, pscontext);
 	if (rv != TCORE_RETURN_SUCCESS) {
 		ps_dbg_ex_co(co_network, "fail to activate context connection");
@@ -2874,7 +2859,6 @@ static gboolean on_context_handle_deactiavte(PacketServiceContext *obj_context,
 	CoreObject *co_network;
 	int context_state = 0;
 	ps_context_t *pscontext = user_data;
-	ps_service_t *service = _ps_context_ref_service(pscontext);
 
 	if (!ps_util_check_access_control(invocation, AC_PS_PRIVATE, "w"))
 		return TRUE;
@@ -2898,12 +2882,9 @@ static gboolean on_context_handle_deactiavte(PacketServiceContext *obj_context,
 	ps_dbg_ex_co(co_network, "deactivate context(%s)", _ps_context_ref_path(pscontext));
 
 	_ps_service_reset_connection_timer(pscontext);
-	/* TBD: dbus method invocation from upper layer. */
-	if (TRUE == _ps_context_get_default_context(pscontext, CONTEXT_ROLE_INTERNET)) {
-		ps_dbg_ex_co(co_network, "Change Always-on when default internet.");
-		_ps_master_set_always_on_control(_ps_modem_ref_master(_ps_service_ref_modem(service)), FALSE);
-	}
-	rv = _ps_service_deactivate_context(service, pscontext);
+	_ps_context_set_alwayson_enable(pscontext, FALSE);
+
+	rv = _ps_service_deactivate_context(pscontext->p_service, pscontext);
 	if (rv != TCORE_RETURN_SUCCESS) {
 		ps_err_ex_co(co_network, "fail to deactivate context connection");
 		FAIL_RESPONSE(invocation,  PS_ERR_TRASPORT);
@@ -3033,7 +3014,6 @@ static gboolean on_context_modify_profile(PacketServiceContext *obj_context,
 	if (context_state == CONTEXT_STATE_ACTIVATING) {
 		ps_dbg_ex_co(co_network, "Modify profile in activating state, set deactivate flag.");
 		context->deact_required = TRUE;
-		goto EXIT;
 	}
 
 	/*Creating the profile property hash for for internal handling*/
@@ -3060,7 +3040,7 @@ static gboolean on_context_modify_profile(PacketServiceContext *obj_context,
 		ps_dbg_ex_co(co_network, "context is already disconnected");
 		_ps_context_set_connected(context, FALSE);
 	}
-EXIT:
+
 	packet_service_context_complete_modify_profile(obj_context, invocation, TRUE);
 	g_hash_table_destroy(profile_property);
 	return TRUE;

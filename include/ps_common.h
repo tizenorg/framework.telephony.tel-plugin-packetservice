@@ -169,8 +169,6 @@ typedef struct packet_service_master {
 	GDBusConnection *conn;
 	PacketServiceMaster *if_obj;
 	GHashTable *modems;
-
-	gboolean initial_pdp_conn; // If FALSE, PDP never been connected for any of slots.
 } ps_master_t;
 
 typedef struct packet_service_modem {
@@ -221,6 +219,7 @@ typedef struct packet_service_service {
 	gboolean ps_attached;
 	gboolean roaming;
 	gboolean restricted;
+	gboolean initial_pdp_conn; // If FALSE, PDP never been connected.
 	gboolean wifi_connected_checked; // If TRUE, We already checked wifi-connected state.
 	gboolean attach_apn_complete; // set TRUE, initial define is complete for attach APN.
 	enum telephony_network_access_technology act;
@@ -267,13 +266,13 @@ gboolean    _ps_master_get_storage_value_bool(gpointer master, enum tcore_storag
 gboolean    _ps_master_get_storage_value_int(gpointer master, enum tcore_storage_key key);
 gboolean    _ps_master_set_storage_value_bool(gpointer master, enum tcore_storage_key key, gboolean value);
 gboolean    _ps_master_set_storage_value_int(gpointer master, enum tcore_storage_key key, gint value);
-gboolean 	_ps_master_set_always_on_control(gpointer master, gboolean enable);
 
 /*MODEM*/
 void 		__remove_modem_handler(gpointer modem);
 gpointer    _ps_modem_create_modem(GDBusConnection *conn, TcorePlugin *p, gpointer master,
 				gchar* modem_name, gpointer co_modem, gchar *cp_name);
 void        _ps_modem_destroy_modem(GDBusConnection *conn, gpointer object);
+gboolean 	_ps_modem_send_filght_mode_request(gpointer value, void *data);
 gboolean    _ps_modem_processing_flight_mode(gpointer object, gboolean enable);
 gboolean    _ps_modem_processing_power_enable(gpointer modem, int enable);
 gboolean    _ps_modem_processing_sim_complete(gpointer modem, gboolean complete, gchar *operator);
@@ -295,12 +294,13 @@ gint 		_ps_modem_get_roaming_apn_support(gpointer object);
 void 		_ps_modem_set_roaming_apn_support(gpointer object, gboolean value);
 guchar		_ps_modem_get_hook_flag(gpointer modem);
 gboolean    _ps_modem_get_flght_mode(gpointer object);
+void 		_ps_modem_set_flght_mode_ups(gpointer object, gboolean value);
+gboolean    _ps_modem_get_flght_mode_ups(gpointer object);
 gboolean    _ps_modem_get_sim_init(gpointer object);
 int    _ps_modem_get_power(gpointer object);
 gchar*      _ps_modem_ref_operator(gpointer object);
 gboolean	_ps_modem_get_properties_handler(gpointer object, GVariantBuilder * properties);
 GVariant*	_ps_modem_get_properties(gpointer object, GVariantBuilder *properties);
-gpointer 	_ps_modem_ref_master(gpointer modem);
 GHashTable* _ps_modem_ref_services(gpointer modem);
 gchar*      _ps_modem_ref_path(gpointer modem);
 gpointer    _ps_modem_ref_plugin(gpointer modem);
@@ -337,7 +337,7 @@ void        _ps_service_reset_connection_timer(gpointer context);
 int         _ps_service_connect_default_context(gpointer service);
 void        _ps_service_remove_contexts(gpointer object);
 void        _ps_service_disconnect_contexts(gpointer service);
-void	_ps_service_disconnect_internet_mms_tethering_contexts(gpointer object);
+void	_ps_service_disconnect_internet_mms_contexts(gpointer object);
 gboolean    _ps_service_processing_network_event(gpointer service, gboolean ps_attached, gboolean roaming);
 gpointer    _ps_service_return_default_context(gpointer object, int svc_cat_id);
 gpointer    _ps_service_return_non_default_context(gpointer object, int svc_cat_id);

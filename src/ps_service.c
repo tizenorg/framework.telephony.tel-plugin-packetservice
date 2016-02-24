@@ -26,7 +26,6 @@
 #include <core_object.h>
 #include <co_ps.h>
 #include <co_context.h>
-#include <co_network.h>
 #include <storage.h>
 
 #define PROP_DEFAULT	FALSE
@@ -155,7 +154,6 @@ static gboolean __ps_service_check_connection_option(gpointer object, gpointer c
 
 	ps_service_t *service = object;
 	ps_modem_t *modem = _ps_service_ref_modem(service);
-	ps_master_t *master = _ps_modem_ref_master(modem);
 	ps_context_t *ps_context = context;
 	CoreObject *co_context = (CoreObject *)_ps_context_ref_co_context(context);
 	CoreObject *co_network = _ps_service_ref_co_network(service);
@@ -166,12 +164,9 @@ static gboolean __ps_service_check_connection_option(gpointer object, gpointer c
 	}
 
 	role = tcore_context_get_role(co_context);
-	if (service->roaming) {
-		gboolean roaming_allowed = FALSE;
-		roaming_allowed = _ps_modem_get_data_roaming_allowed(modem);
-		ps_warn_ex_co(co_network, "roaming_allowed:[%d]", roaming_allowed);
-		b_connect &= roaming_allowed;
-	}
+	if (service->roaming)
+		b_connect &= _ps_modem_get_data_roaming_allowed(modem);
+
 	sim = _ps_modem_get_sim_init(modem);
 	data = _ps_modem_get_data_allowed(modem);
 	flight = _ps_modem_get_flght_mode(modem);
@@ -228,7 +223,7 @@ static gboolean __ps_service_check_connection_option(gpointer object, gpointer c
 	 * taken care of by telephony.
 	 * Solution: Do not PDP retry until initial PDP connection when Wifi connected.
 	 */
-	if (master && master->initial_pdp_conn == FALSE) {
+	if (service->initial_pdp_conn == FALSE) {
 		int wifi_state = PS_WIFI_STATE_OFF;
 		Server *s = NULL;
 		Storage *strg = NULL;
@@ -281,29 +276,6 @@ static int __ps_service_connetion_timeout_handler(alarm_id_t alarm_id, void *con
 	}
 	rv = _ps_service_activate_context(service, context);
 	ps_dbg_ex_co(_ps_service_ref_co_network(service), "return rv(%d)", rv);
-	return rv;
-}
-
-static gboolean __ps_service_check_is_network_in_serivce(gpointer object)
-{
-	ps_service_t *service = object;
-	CoreObject *co_network = NULL;
-	enum telephony_network_service_type service_type = NETWORK_SERVICE_TYPE_UNKNOWN;
-	gboolean rv = FALSE;
-
-	co_network = _ps_service_ref_co_network(service);
-	tcore_network_get_service_type(co_network, &service_type);
-	ps_warn_ex_co(co_network, "service_type[%d]", service_type);
-	switch (service_type) {
-		case NETWORK_SERVICE_TYPE_UNKNOWN:
-		case NETWORK_SERVICE_TYPE_NO_SERVICE:
-		case NETWORK_SERVICE_TYPE_EMERGENCY:
-		case NETWORK_SERVICE_TYPE_SEARCH:
-			break;
-		default:
-			rv = TRUE;
-			break;
-	}
 	return rv;
 }
 
@@ -591,21 +563,19 @@ gboolean _ps_service_set_context_devinfo(gpointer object, struct tnoti_ps_pdp_ip
 					devinfo->ip_address[0], devinfo->ip_address[1],
 					devinfo->ip_address[2], devinfo->ip_address[3]);
 				if (!g_str_equal(ipv4, "0.0.0.0")) {
-					devinfo->pcscf_ipv4 = g_try_malloc0(sizeof(char *));
-					if (devinfo->pcscf_ipv4 == NULL)
-						continue;
-					devinfo->pcscf_ipv4[0] = g_strdup("220.103.220.10");
 					devinfo->pcscf_ipv4_count = 1;
+					devinfo->pcscf_ipv4 = g_try_malloc0(sizeof(char *) * devinfo->pcscf_ipv4_count);
+					if (devinfo->pcscf_ipv4 != NULL)
+						devinfo->pcscf_ipv4[0] = g_strdup("220.103.220.10");
 				}
 			}
 			/*IPv6*/
 			if (devinfo->pcscf_ipv6_count == 0) {
 				if (devinfo->ipv6_address != NULL) {
-					devinfo->pcscf_ipv6 = g_try_malloc0(sizeof(char *));
-					if (devinfo->pcscf_ipv6 == NULL)
-						continue;
-					devinfo->pcscf_ipv6[0] = g_strdup("2001:2d8:00e0:0220::10");
 					devinfo->pcscf_ipv6_count = 1;
+					devinfo->pcscf_ipv6 = g_try_malloc0(sizeof(char *) * devinfo->pcscf_ipv6_count);
+					if (devinfo->pcscf_ipv6 != NULL)
+						devinfo->pcscf_ipv6[0] = g_strdup("2001:2d8:00e0:0220::10");
 				}
 			}
 		}
@@ -894,14 +864,14 @@ void _ps_service_disconnect_contexts(gpointer object)
 	return;
 }
 
-void _ps_service_disconnect_internet_mms_tethering_contexts(gpointer object)
+void _ps_service_disconnect_internet_mms_contexts(gpointer object)
 {
 	unsigned int index;
 	ps_service_t *service = object;
 	CoreObject *co_context = NULL;
 	enum co_context_role role = CONTEXT_ROLE_UNKNOWN;
 
-	dbg("Service disconnect Internet/MMS/Tethering contexts");
+	dbg("Service disconnect Internet/MMS contexts");
 	g_return_if_fail(service != NULL);
 
 	for (index = 0; index < g_slist_length(service->contexts); index++) {
@@ -915,14 +885,12 @@ void _ps_service_disconnect_internet_mms_tethering_contexts(gpointer object)
 		 *	- INTERNET_PREPAID
 		 *	- MMS
 		 *	- MMS_PREPAID
-		 *	- TETHERING
 		 */
 		switch (role) {
 		case CONTEXT_ROLE_INTERNET:
 		case CONTEXT_ROLE_MMS:
 		case CONTEXT_ROLE_PREPAID_INTERNET:
 		case CONTEXT_ROLE_PREPAID_MMS:
-		case CONTEXT_ROLE_TETHERING:
 			_ps_service_reset_connection_timer(value);
 			_ps_service_deactivate_context(service, value);
 		break;
@@ -1039,13 +1007,12 @@ gboolean _ps_service_processing_network_event(gpointer object, gboolean ps_attac
 	gboolean prev_roaming_status;
 	g_return_val_if_fail(service != NULL, FALSE);
 
-	co_network = _ps_service_ref_co_network(service);
+
 	prev_roaming_status = _ps_service_get_roaming(service);
-	if(__ps_service_check_is_network_in_serivce(service) != TRUE)
-		ps_warn_ex_co(co_network, "Update roaming status only in IN SRV");
-	else
-		_ps_service_set_roaming(service, roaming);
+
+	co_network = _ps_service_ref_co_network(service);
 	_ps_service_set_ps_attached(service, ps_attached);
+	_ps_service_set_roaming(service, roaming);
 	_ps_update_cellular_state_key(service);
 
 	if (prev_roaming_status != _ps_service_get_roaming(service)) {
@@ -1073,17 +1040,17 @@ gboolean _ps_service_set_connected(gpointer object, gpointer cstatus, gboolean e
 	gpointer def_conn = NULL;
 	gpointer requested_conn = NULL;
 
-	ps_service_t *service = (ps_service_t *) object;
-	ps_master_t *master = _ps_modem_ref_master(_ps_service_ref_modem(object));
+	ps_service_t *service = NULL;
 	struct tnoti_ps_call_status *call_status = NULL;
 	CoreObject *co_network;
 
+	service = (ps_service_t *) object;
 	co_network = _ps_service_ref_co_network(service);
 	call_status = (struct tnoti_ps_call_status *)cstatus;
 
-	if (enabled && master && master->initial_pdp_conn == FALSE) {
+	if (enabled && service->initial_pdp_conn == FALSE) {
 		ps_dbg_ex_co(co_network, "Initial PDP connection.");
-		master->initial_pdp_conn = TRUE;
+		service->initial_pdp_conn = TRUE;
 	}
 
 	for (index = 0; index < g_slist_length(service->contexts); index++) {

@@ -567,20 +567,9 @@ void __ps_modem_cp_reset_send_pending_request_response(gpointer data)
 
 static void __ps_modem_cp_reset_handler(gpointer object)
 {
-	unsigned int index;
 	ps_modem_t *modem = object;
 
-	dbg("disconnect all contexts");
-	/* send deactivation request to clear resources. */
-	for (index = 0; index < g_slist_length(modem->contexts); index++) {
-		gpointer context = g_slist_nth_data(modem->contexts, index);
-		ps_service_t *service = _ps_context_ref_service(context);
-		CoreObject *co_context = _ps_context_ref_co_context(context);
-		if(service == NULL)
-			continue;
-		tcore_ps_deactivate_context(service->co_ps, co_context, NULL);
-		tcore_context_set_state(co_context, CONTEXT_STATE_DEACTIVATED);
-	}
+	dbg("Entred");
 	/* check for any pending request in modem queue and respond with error */
 	__ps_modem_cp_reset_send_pending_request_response(modem);
 
@@ -1064,7 +1053,9 @@ void __ps_send_pending_user_request(gpointer data)
 			break;
 
 			case TREQ_MODEM_POWER_LOW:
-#ifndef POWER_SAVING_FEATURE_WEARABLE
+#ifdef POWER_SAVING_FEATURE_WEARABLE
+				__ps_check_handle_modem_off_request(modem, ON_REQUEST, TNOTI_UNKNOWN);
+#else
 				if (modem->hook_flag & PS_NETWORK_SET_POWER_LOW)
 					if (TCORE_RETURN_SUCCESS != tcore_object_dispatch_request(modem->co_modem, wqd->ur))
 						err("Failed to dispatch ");
